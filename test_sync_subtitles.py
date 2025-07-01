@@ -88,3 +88,37 @@ Hello
         {'start_time': 2000, 'end_time': 3000, 'tl_text': 'Hello', 'sl_text': 'hola'}
     ]
 
+
+def test_dedupe_cues():
+    from sync_subtitles import dedupe_cues
+
+    cues = [
+        {'start_time': 0, 'end_time': 1000, 'text': 'hi'},
+        {'start_time': 1000, 'end_time': 2000, 'text': 'hi'},
+        {'start_time': 2000, 'end_time': 3000, 'text': 'there'},
+        {'start_time': 3000, 'end_time': 4000, 'text': 'there'},
+    ]
+
+    deduped = dedupe_cues(cues)
+    assert deduped == [
+        {'start_time': 0, 'end_time': 1000, 'text': 'hi'},
+        {'start_time': 2000, 'end_time': 3000, 'text': 'there'},
+    ]
+
+
+def test_write_scripts_dedupes(tmp_path):
+    from sync_subtitles import write_scripts
+
+    collapsed = [
+        {'start_time': 0, 'end_time': 1000, 'tl_text': 'hi', 'sl_text': 'hola'},
+        {'start_time': 1000, 'end_time': 2000, 'tl_text': 'hi', 'sl_text': 'adios'},
+        {'start_time': 2000, 'end_time': 3000, 'tl_text': 'bye', 'sl_text': 'adios'},
+        {'start_time': 3000, 'end_time': 4000, 'tl_text': 'bye', 'sl_text': 'adios'},
+    ]
+
+    out = tmp_path / "script"
+    write_scripts(collapsed, str(out), "en", "es")
+
+    assert (tmp_path / "script_en.txt").read_text().splitlines() == ['hi', 'bye']
+    assert (tmp_path / "script_es.txt").read_text().splitlines() == ['hola', 'adios']
+
