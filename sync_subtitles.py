@@ -128,6 +128,7 @@ def write_scripts(collapsed: List[Dict], outpath: str, tl_lang_code: str, sl_lan
             sl_lines.append(seg['sl_text'])
             last_sl = seg['sl_text']
 
+
     with open(f"{outpath}_{tl_lang_code}.txt", "w", encoding="utf-8") as fh:
         fh.write("\n".join(tl_lines))
 

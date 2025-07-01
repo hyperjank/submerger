@@ -122,3 +122,4 @@ def test_write_scripts_dedupes(tmp_path):
     assert (tmp_path / "script_en.txt").read_text().splitlines() == ['hi', 'bye']
     assert (tmp_path / "script_es.txt").read_text().splitlines() == ['hola', 'adios']
 
+
