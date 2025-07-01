@@ -1,0 +1,13 @@
+# Byte-compiled / optimized / etc.
+__pycache__/
+*.py[cod]
+
+# Editor swap files
+*~
+.*.sw?
+
+# Environment files
+.env
+
+# Generated subtitle outputs
+*.srt
