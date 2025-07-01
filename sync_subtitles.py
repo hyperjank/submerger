@@ -7,6 +7,9 @@ def make_cued(source_subtitle):
     subs = pysubs2.load(source_subtitle)
     cues = []
     for ev in subs.events:
+        # skip cues with no visible text after stripping markup
+        if not ev.plaintext.strip():
+            continue
         cues.append({
             'start_time': ev.start,
             'end_time': ev.end,
