@@ -16,6 +16,7 @@ def make_cued(source_subtitle):
 
 
 def pair_subtitles(tl_cued, sl_cued):
+
     """Return a merged timeline of TL/SL cues.
 
     The input cue lists should already be sorted by ``start_time``.  The
@@ -27,6 +28,7 @@ def pair_subtitles(tl_cued, sl_cued):
     # Collect all boundaries that define the timeline
     times = {t for cue in tl_cued for t in (cue["start_time"], cue["end_time"])}
     times.update(t for cue in sl_cued for t in (cue["start_time"], cue["end_time"]))
+
     timeline = sorted(times)
 
     paired_subs = []
