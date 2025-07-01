@@ -27,12 +27,14 @@ set in a ``.env`` file or your shell environment:
 
 * ``LLM_API_KEY`` – API token for the language model service.
 * ``LLM_API_BASE`` – Base URL of the API (e.g. ``http://localhost:8000/v1`` for
-  a local model).  Defaults to the public DeepSeek endpoint.
+  a local model).  Defaults to the local endpoint.
 * ``LLM_MODEL`` – Model name to use (defaults to ``deepseek-chat``).
 
 You can then run ``sync_subtitles.py`` or ``llm_align.py`` with your two subtitle
 files regardless of language. Both scripts provide command line options for the
 input files and language codes.
+Use the ``--deepseek`` flag if you want to send requests to the public
+DeepSeek service instead of the local API.
 
 ### Future:
 

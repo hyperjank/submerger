@@ -14,10 +14,11 @@ from openai import OpenAI
 load_dotenv()  # look for a .env file in cwd or above
 
 # Environment variables allow overriding the default LLM credentials and
-# endpoint.  ``LLM_API_KEY`` falls back to the historical
-# ``DEEPSEEK_API_KEY`` if set.
-api_key = os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
-endpoint = os.getenv("LLM_API_BASE", "https://api.deepseek.com/v1")
+# endpoint. By default we assume a local API (``LLM_API_BASE``) with
+# ``LLM_API_KEY``. The historical ``DEEPSEEK_API_KEY`` points to the public
+# DeepSeek service and can be enabled via ``--deepseek`` on the CLI.
+api_key = os.getenv("LLM_API_KEY")
+endpoint = os.getenv("LLM_API_BASE", "http://localhost:8000/v1")
 model = os.getenv("LLM_MODEL", "deepseek-chat")
 
 # Instantiate the client only when a key is provided so library imports do not
@@ -246,8 +247,20 @@ if __name__ == "__main__":
     parser.add_argument("--tl-code", default="tl", help="language code for the target language")
     parser.add_argument("--sl-code", default="sl", help="language code for the source language")
     parser.add_argument("--out", default="final_synced", help="base path for output files")
+    parser.add_argument(
+        "--deepseek",
+        action="store_true",
+        help="Use the DeepSeek API instead of the local LLM endpoint",
+    )
 
     args = parser.parse_args()
+
+    if args.deepseek:
+        # override globals to use the DeepSeek service
+        api_key = os.getenv("DEEPSEEK_API_KEY")
+        endpoint = "https://api.deepseek.com/v1"
+        model = os.getenv("LLM_MODEL", "deepseek-chat")
+        client = OpenAI(api_key=api_key, base_url=endpoint) if api_key else None
 
     tl_cues = make_cued(args.tl_file)
     sl_cues = make_cued(args.sl_file)
