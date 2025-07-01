@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import pysubs2
+from typing import List, Dict
 
 
 def make_cued(source_subtitle):
@@ -16,6 +17,18 @@ def make_cued(source_subtitle):
             'text': ev.text.strip(),
         })
     return sorted(cues, key=lambda c: c['start_time'])
+
+
+def dedupe_cues(cues: List[Dict]) -> List[Dict]:
+    """Return a new list with consecutive duplicate texts removed."""
+    deduped: List[Dict] = []
+    last_text = None
+    for cue in cues:
+        if cue['text'] == last_text:
+            continue
+        deduped.append(cue)
+        last_text = cue['text']
+    return deduped
 
 
 def pair_subtitles(tl_cued, sl_cued):
@@ -101,6 +114,23 @@ def write_synced_subs(collapsed, outpath, tl_lang_code, sl_lang_code):
     sl_subs.save(f"{outpath}_{sl_lang_code}.srt")
 
 
+def write_scripts(collapsed: List[Dict], outpath: str, tl_lang_code: str, sl_lang_code: str) -> None:
+    """Write plain text scripts for both languages."""
+    tl_lines: List[str] = []
+    sl_lines: List[str] = []
+    for seg in collapsed:
+        if seg['tl_text']:
+            tl_lines.append(seg['tl_text'])
+        if seg['sl_text']:
+            sl_lines.append(seg['sl_text'])
+
+    with open(f"{outpath}_{tl_lang_code}.txt", "w", encoding="utf-8") as fh:
+        fh.write("\n".join(tl_lines))
+
+    with open(f"{outpath}_{sl_lang_code}.txt", "w", encoding="utf-8") as fh:
+        fh.write("\n".join(sl_lines))
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -113,9 +143,10 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    tl_cues = make_cued(args.tl_file)
-    sl_cues = make_cued(args.sl_file)
+    tl_cues = dedupe_cues(make_cued(args.tl_file))
+    sl_cues = dedupe_cues(make_cued(args.sl_file))
     paired_subs = pair_subtitles(tl_cues, sl_cues)
     write_synced_subs(paired_subs, args.out, args.tl_code, args.sl_code)
+    write_scripts(paired_subs, args.out, args.tl_code, args.sl_code)
 
 

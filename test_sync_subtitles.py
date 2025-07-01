@@ -88,3 +88,20 @@ Hello
         {'start_time': 2000, 'end_time': 3000, 'tl_text': 'Hello', 'sl_text': 'hola'}
     ]
 
+
+def test_dedupe_cues():
+    from sync_subtitles import dedupe_cues
+
+    cues = [
+        {'start_time': 0, 'end_time': 1000, 'text': 'hi'},
+        {'start_time': 1000, 'end_time': 2000, 'text': 'hi'},
+        {'start_time': 2000, 'end_time': 3000, 'text': 'there'},
+        {'start_time': 3000, 'end_time': 4000, 'text': 'there'},
+    ]
+
+    deduped = dedupe_cues(cues)
+    assert deduped == [
+        {'start_time': 0, 'end_time': 1000, 'text': 'hi'},
+        {'start_time': 2000, 'end_time': 3000, 'text': 'there'},
+    ]
+
