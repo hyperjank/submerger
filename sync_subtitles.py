@@ -16,31 +16,59 @@ def make_cued(source_subtitle):
 
 
 def pair_subtitles(tl_cued, sl_cued):
-    ''''''
-    times = set()
-    for list in (tl_cued, sl_cued):
-        for cue in list:
-            times.add(cue['start_time'])
-            times.add(cue['end_time'])
+    """Return a merged timeline of TL/SL cues.
+
+    The input cue lists should already be sorted by ``start_time``.  The
+    function walks both lists with independent indexes so every cue is visited
+    only once.  This linear pass is significantly faster than repeatedly
+    searching the lists for the active cue at each point in the timeline.
+    """
+
+    # Collect all boundaries that define the timeline
+    times = {t for cue in tl_cued for t in (cue["start_time"], cue["end_time"])}
+    times.update(t for cue in sl_cued for t in (cue["start_time"], cue["end_time"]))
     timeline = sorted(times)
+
     paired_subs = []
+    i = j = 0
+    tl_cue = tl_cued[i] if tl_cued else None
+    sl_cue = sl_cued[j] if sl_cued else None
+    tl_text = ""
+    sl_text = ""
+
     for t0, t1 in zip(timeline, timeline[1:]):
-        tl_text = next((c["text"] for c in tl_cued if c["start_time"] <= t0 < c['end_time']), "")
-        sl_text = next((c["text"] for c in sl_cued if c["start_time"] <= t0 < c['end_time']), "")
-        
+        # Advance TL index until the cue covering ``t0`` is found
+        while tl_cue and tl_cue["end_time"] <= t0:
+            i += 1
+            tl_cue = tl_cued[i] if i < len(tl_cued) else None
+        if tl_cue and tl_cue["start_time"] <= t0 < tl_cue["end_time"]:
+            tl_text = tl_cue["text"]
+        else:
+            tl_text = ""
+
+        # Advance SL index until the cue covering ``t0`` is found
+        while sl_cue and sl_cue["end_time"] <= t0:
+            j += 1
+            sl_cue = sl_cued[j] if j < len(sl_cued) else None
+        if sl_cue and sl_cue["start_time"] <= t0 < sl_cue["end_time"]:
+            sl_text = sl_cue["text"]
+        else:
+            sl_text = ""
+
         if not (tl_text or sl_text):
             continue
-        
+
         last = paired_subs[-1] if paired_subs else None
-        if last and last['tl_text'] == tl_text and last['sl_text'] == sl_text:
-            last['end_time'] = t1
+        if last and last["tl_text"] == tl_text and last["sl_text"] == sl_text:
+            last["end_time"] = t1
         else:
             paired_subs.append({
-               "start_time": t0,
-               "end_time": t1,
-               "tl_text": tl_text,
-               "sl_text": sl_text
+                "start_time": t0,
+                "end_time": t1,
+                "tl_text": tl_text,
+                "sl_text": sl_text,
             })
+
     return paired_subs
 
 
