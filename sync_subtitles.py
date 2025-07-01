@@ -97,24 +97,40 @@ def pair_subtitles(tl_cued, sl_cued):
 
 
 def write_synced_subs(collapsed, outpath, tl_lang_code, sl_lang_code):
+    """Write paired subtitles while merging consecutive duplicate cues."""
+
     tl_subs = pysubs2.SSAFile()
     sl_subs = pysubs2.SSAFile()
 
+    last_tl = None
+    last_sl = None
+
     for seg in collapsed:
-        tl_subs.events.append(
-            pysubs2.SSAEvent(
-                start=seg["start_time"],
-                end=seg["end_time"],
-                text=seg["tl_text"]
-            )
-        )
-        sl_subs.events.append(
-            pysubs2.SSAEvent(
-                start=seg["start_time"],
-                end=seg["end_time"],
-                text=seg["sl_text"]
-            )
-        )
+        if seg["tl_text"]:
+            if last_tl and last_tl.text == seg["tl_text"] and last_tl.end == seg["start_time"]:
+                last_tl.end = seg["end_time"]
+            else:
+                last_tl = pysubs2.SSAEvent(
+                    start=seg["start_time"],
+                    end=seg["end_time"],
+                    text=seg["tl_text"],
+                )
+                tl_subs.events.append(last_tl)
+        else:
+            last_tl = None
+
+        if seg["sl_text"]:
+            if last_sl and last_sl.text == seg["sl_text"] and last_sl.end == seg["start_time"]:
+                last_sl.end = seg["end_time"]
+            else:
+                last_sl = pysubs2.SSAEvent(
+                    start=seg["start_time"],
+                    end=seg["end_time"],
+                    text=seg["sl_text"],
+                )
+                sl_subs.events.append(last_sl)
+        else:
+            last_sl = None
 
     tl_subs.save(f"{outpath}_{tl_lang_code}.srt")
     sl_subs.save(f"{outpath}_{sl_lang_code}.srt")

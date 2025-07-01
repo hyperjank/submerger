@@ -123,3 +123,24 @@ def test_write_scripts_dedupes(tmp_path):
     assert (tmp_path / "script_es.txt").read_text().splitlines() == ['hola', 'adios']
 
 
+def test_write_synced_subs_dedupes(tmp_path):
+    from sync_subtitles import write_synced_subs
+    import pysubs2
+
+    collapsed = [
+        {'start_time': 0, 'end_time': 1000, 'tl_text': 'hi', 'sl_text': 'hola'},
+        {'start_time': 1000, 'end_time': 2000, 'tl_text': 'hi', 'sl_text': 'adios'},
+        {'start_time': 2000, 'end_time': 3000, 'tl_text': 'bye', 'sl_text': 'adios'},
+        {'start_time': 3000, 'end_time': 4000, 'tl_text': 'bye', 'sl_text': 'adios'},
+    ]
+
+    out = tmp_path / "sub"
+    write_synced_subs(collapsed, str(out), "en", "es")
+
+    tl_events = [(e.start, e.end, e.text) for e in pysubs2.load(str(out) + "_en.srt")] 
+    sl_events = [(e.start, e.end, e.text) for e in pysubs2.load(str(out) + "_es.srt")]
+
+    assert tl_events == [(0, 2000, 'hi'), (2000, 4000, 'bye')]
+    assert sl_events == [(0, 1000, 'hola'), (1000, 4000, 'adios')]
+
+
