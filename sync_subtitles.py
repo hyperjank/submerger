@@ -68,10 +68,15 @@ def write_synced_subs(collapsed, outpath, tl_lang_code, sl_lang_code):
     sl_subs.save(f"{outpath}_{sl_lang_code}.srt")
 
 
-en = make_cued("./test_subs/True Detective - S01E01 - The Long Bright Dark Bluray-1080p.en.srt")
-zh = make_cued("./test_subs/True Detective - S01E01 - The Long Bright Dark Bluray-1080p.zh.srt")
+if __name__ == "__main__":
+    en = make_cued(
+        "./test_subs/True Detective - S01E01 - The Long Bright Dark Bluray-1080p.en.srt"
+    )
+    zh = make_cued(
+        "./test_subs/True Detective - S01E01 - The Long Bright Dark Bluray-1080p.zh.srt"
+    )
 
-paired_subs = pair_subtitles(en, zh)
-write_synced_subs(paired_subs, "synced_subs", "en", "zh")
+    paired_subs = pair_subtitles(en, zh)
+    write_synced_subs(paired_subs, "synced_subs", "en", "zh")
 
 
