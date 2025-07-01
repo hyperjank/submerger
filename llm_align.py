@@ -167,6 +167,32 @@ def call_llm_for_cleanup(tl_sample: List[Dict], sl_sample: List[Dict], model: st
     return ""
 
 
+def apply_cleanup(cues: List[Dict], original: List[Dict], cleaned: List[Dict]) -> List[Dict]:
+    """Return ``cues`` with ``original`` segments replaced by ``cleaned``."""
+
+    orig_keys = {(c['start_time'], c['end_time']) for c in original}
+    clean_map = {(c['start_time'], c['end_time']): c for c in cleaned}
+    updated: List[Dict] = []
+
+    for cue in cues:
+        key = (cue['start_time'], cue['end_time'])
+        if key in orig_keys:
+            cleaned_cue = clean_map.get(key)
+            if cleaned_cue:
+                text = cleaned_cue.get('text', '').strip()
+                if text:
+                    updated.append({
+                        'start_time': cue['start_time'],
+                        'end_time': cue['end_time'],
+                        'text': text,
+                    })
+            # omitted cue means it was removed
+        else:
+            updated.append(cue)
+
+    return updated
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 4) Glue everything together
 # ──────────────────────────────────────────────────────────────────────────────
@@ -330,6 +356,12 @@ if __name__ == "__main__":
             sl_sample = sample_segments(sl_cues)
             response = call_llm_for_cleanup(tl_sample, sl_sample, model=model)
             print("LLM cleanup suggestion:\n" + response)
+            try:
+                cleaned = json.loads(sanitize_json(response))
+                tl_cues = apply_cleanup(tl_cues, tl_sample, cleaned.get('tl_sample', []))
+                sl_cues = apply_cleanup(sl_cues, sl_sample, cleaned.get('sl_sample', []))
+            except Exception as exc:
+                print(f"LLM cleanup parse failed: {exc}")
         except Exception as exc:
             print(f"LLM cleanup failed: {exc}")
 
