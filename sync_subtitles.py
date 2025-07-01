@@ -102,14 +102,20 @@ def write_synced_subs(collapsed, outpath, tl_lang_code, sl_lang_code):
 
 
 if __name__ == "__main__":
-    en = make_cued(
-        "./test_subs/True Detective - S01E01 - The Long Bright Dark Bluray-1080p.en.srt"
-    )
-    zh = make_cued(
-        "./test_subs/True Detective - S01E01 - The Long Bright Dark Bluray-1080p.zh.srt"
-    )
+    import argparse
 
-    paired_subs = pair_subtitles(en, zh)
-    write_synced_subs(paired_subs, "synced_subs", "en", "zh")
+    parser = argparse.ArgumentParser(description="Pair two subtitle files")
+    parser.add_argument("tl_file", help="Target language subtitle file")
+    parser.add_argument("sl_file", help="Source language subtitle file")
+    parser.add_argument("--tl-code", default="tl", help="language code for target language")
+    parser.add_argument("--sl-code", default="sl", help="language code for source language")
+    parser.add_argument("--out", default="synced_subs", help="base path for output files")
+
+    args = parser.parse_args()
+
+    tl_cues = make_cued(args.tl_file)
+    sl_cues = make_cued(args.sl_file)
+    paired_subs = pair_subtitles(tl_cues, sl_cues)
+    write_synced_subs(paired_subs, args.out, args.tl_code, args.sl_code)
 
 

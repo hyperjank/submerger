@@ -12,9 +12,16 @@ from openai import OpenAI
 # Load your API key from .env
 # ──────────────────────────────────────────────────────────────────────────────
 load_dotenv()  # look for a .env file in cwd or above
-api_key = os.getenv("DEEPSEEK_API_KEY")
-endpoint = "https://api.deepseek.com/v1"
-model = "deepseek-chat"
+
+# Environment variables allow overriding the default LLM credentials and
+# endpoint.  ``LLM_API_KEY`` falls back to the historical
+# ``DEEPSEEK_API_KEY`` if set.
+api_key = os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
+endpoint = os.getenv("LLM_API_BASE", "https://api.deepseek.com/v1")
+model = os.getenv("LLM_MODEL", "deepseek-chat")
+
+# Instantiate the client only when a key is provided so library imports do not
+# fail in environments without credentials (e.g. during testing).
 client = OpenAI(api_key=api_key, base_url=endpoint) if api_key else None
 # ──────────────────────────────────────────────────────────────────────────────
 # 1) Utilities to write out SRTs
@@ -62,8 +69,9 @@ def windowed(chunks: List, size: int):
 # ------------------------------------------------------------------------------
 
 def _normalized(text: str) -> str:
-    """Return ascii/pinyin representation for rough cross-language matching."""
-    # convert Chinese characters to pinyin for a crude similarity check
+    """Return ASCII/pinyin representation for rough cross-language matching."""
+    # If the text contains Chinese characters convert them to pinyin for a crude
+    # similarity check.  Other scripts simply pass through.
     if any('\u4e00' <= ch <= '\u9fff' for ch in text):
         text = ' '.join(lazy_pinyin(text))
     text = ''.join(ch.lower() if ch.isalnum() else ' ' for ch in text)
@@ -96,17 +104,18 @@ def call_llm_for_alignment(
     model: str,
     max_tokens: int = 8192,
 ) -> List[Dict]:
-    """
-    Ask the LLM to align and re-time each Chinese–English chunk.
-    Returns a list of dicts, each with keys:
+    """Ask the LLM to align and re-time each pair of subtitle chunks.
+
+    Returns a list of dictionaries each containing:
       tl_idx (int), sl_idx (int),
       start_time (int ms), end_time (int ms).
     """
     system = {
         "role": "system",
         "content": (
-            "You are a subtitle alignment assistant.  Given two lists of subtitle chunks, "
-            "for each Chinese–English pair return a JSON array of objects with these fields:\n"
+            "You are a subtitle alignment assistant. Given two lists of subtitle "
+            "chunks in different languages, return a JSON array describing the "
+            "aligned pairs with these fields:\n"
             "- tl_idx and sl_idx (original indices)\n"
             "- start_time and end_time in milliseconds (new display window)\n"
             "Ensure both texts appear together and strip any ads or URLs."
@@ -115,9 +124,9 @@ def call_llm_for_alignment(
     user = {
         "role": "user",
         "content": (
-            "Chinese chunks (index: text):\n"
+            "Target language chunks (index: text):\n"
             + "\n".join(f"{i}: {t}" for i, t in enumerate(tl_texts))
-            + "\n\nEnglish chunks (index: text):\n"
+            + "\n\nSource language chunks (index: text):\n"
             + "\n".join(f"{j}: {t}" for j, t in enumerate(sl_texts))
             + "\n\nRespond with ONLY a JSON array like:\n"
             "[{\"tl_idx\":0,\"sl_idx\":2,\"start_time\":1234,\"end_time\":5678}, …]"
@@ -125,7 +134,9 @@ def call_llm_for_alignment(
     }
 
     if client is None:
-        raise RuntimeError("LLM client not configured; set DEEPSEEK_API_KEY")
+        raise RuntimeError(
+            "LLM client not configured; set LLM_API_KEY or DEEPSEEK_API_KEY"
+        )
 
     resp = client.chat.completions.create(
         model=model,
@@ -226,19 +237,24 @@ def align_with_llm(
 # ──────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    from sync_subtitles import make_cued, pair_subtitles  # adapt import
+    from sync_subtitles import make_cued, pair_subtitles
+    import argparse
 
-    # 1. load your two original files
-    tl_cues = make_cued("synced_subs_zh.srt")
-    sl_cues = make_cued("synced_subs_en.srt")
+    parser = argparse.ArgumentParser(description="Align two subtitle files via an LLM")
+    parser.add_argument("tl_file", help="Target language subtitle file")
+    parser.add_argument("sl_file", help="Source language subtitle file")
+    parser.add_argument("--tl-code", default="tl", help="language code for the target language")
+    parser.add_argument("--sl-code", default="sl", help="language code for the source language")
+    parser.add_argument("--out", default="final_synced", help="base path for output files")
 
-    # 2. get the rough collapsed timeline
+    args = parser.parse_args()
+
+    tl_cues = make_cued(args.tl_file)
+    sl_cues = make_cued(args.sl_file)
+
     raw_collapsed = pair_subtitles(tl_cues, sl_cues)
-
-    # 3. ask the LLM to refine that alignment
     llm_aligned = align_with_llm(raw_collapsed, batch_size=30)
 
-    # 4. write out the final synced SRTs
-    write_synced_subs(llm_aligned, "final_synced", "zh", "en")
+    write_synced_subs(llm_aligned, args.out, args.tl_code, args.sl_code)
 
-    print("Done!  final_synced_zh.srt  +  final_synced_en.srt generated.")
+    print(f"Done!  {args.out}_{args.tl_code}.srt + {args.out}_{args.sl_code}.srt generated.")
