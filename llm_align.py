@@ -180,6 +180,70 @@ def align_with_llm(
     return collapsed_final
 
 
+def adjust_aligned_timings(collapsed: List[Dict], time_tolerance: int = 700) -> List[Dict]:
+    """Expand matching TL/SL pairs so their timestamps line up.
+
+    If two segments contain translations of each other and their start/end
+    times are within ``time_tolerance``, the shorter segment is lengthened to
+    match the longer one.  Adjacent one-sided segments with the same text are
+    absorbed into the expanded window.
+    """
+
+    adjusted: List[Dict] = []
+    i = 0
+    while i < len(collapsed):
+        seg = collapsed[i]
+        if seg['tl_text'] and seg['sl_text']:
+            start = seg['start_time']
+            end = seg['end_time']
+
+            # absorb previous segments with same text on either side
+            while adjusted:
+                prev = adjusted[-1]
+                if prev['sl_text'] == '' and prev['tl_text'] == seg['tl_text'] and start - prev['start_time'] <= time_tolerance:
+                    start = prev['start_time']
+                    adjusted.pop()
+                elif prev['tl_text'] == '' and prev['sl_text'] == seg['sl_text'] and start - prev['start_time'] <= time_tolerance:
+                    start = prev['start_time']
+                    adjusted.pop()
+                else:
+                    break
+
+            j = i + 1
+            while j < len(collapsed):
+                nxt = collapsed[j]
+                if nxt['tl_text'] == seg['tl_text'] and nxt['sl_text'] == '' and nxt['end_time'] - end <= time_tolerance:
+                    end = nxt['end_time']
+                    j += 1
+                elif nxt['tl_text'] == '' and nxt['sl_text'] == seg['sl_text'] and nxt['end_time'] - end <= time_tolerance:
+                    end = nxt['end_time']
+                    j += 1
+                else:
+                    break
+
+            adjusted.append({
+                'start_time': start,
+                'end_time': end,
+                'tl_text': seg['tl_text'],
+                'sl_text': seg['sl_text'],
+            })
+            i = j
+        else:
+            adjusted.append(seg)
+            i += 1
+
+    # collapse again after expansion
+    final: List[Dict] = []
+    for seg in adjusted:
+        last = final[-1] if final else None
+        if last and last['tl_text'] == seg['tl_text'] and last['sl_text'] == seg['sl_text'] and last['end_time'] == seg['start_time']:
+            last['end_time'] = seg['end_time']
+        else:
+            final.append(seg)
+
+    return final
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) Main routine
 # ──────────────────────────────────────────────────────────────────────────────
@@ -214,7 +278,8 @@ if __name__ == "__main__":
 
     raw_collapsed = pair_subtitles(tl_cues, sl_cues)
     llm_aligned = align_with_llm(raw_collapsed, batch_size=30)
+    aligned = adjust_aligned_timings(llm_aligned)
 
-    write_synced_subs(llm_aligned, args.out, args.tl_code, args.sl_code)
+    write_synced_subs(aligned, args.out, args.tl_code, args.sl_code)
 
     print(f"Done!  {args.out}_{args.tl_code}.srt + {args.out}_{args.sl_code}.srt generated.")

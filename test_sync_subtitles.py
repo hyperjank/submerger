@@ -144,3 +144,19 @@ def test_write_synced_subs_dedupes(tmp_path):
     assert sl_events == [(0, 1000, 'hola'), (1000, 4000, 'adios')]
 
 
+def test_adjust_aligned_timings_merges_nearby():
+    from sync_subtitles import pair_subtitles
+    from llm_align import align_with_llm, adjust_aligned_timings
+
+    tl = [{'start_time': 0, 'end_time': 1000, 'text': 'hi'}]
+    sl = [{'start_time': 50, 'end_time': 800, 'text': 'hola'}]
+
+    collapsed = pair_subtitles(tl, sl)
+    aligned = align_with_llm(collapsed, time_tolerance=200)
+    adjusted = adjust_aligned_timings(aligned, time_tolerance=200)
+
+    assert adjusted == [
+        {'start_time': 0, 'end_time': 1000, 'tl_text': 'hi', 'sl_text': 'hola'}
+    ]
+
+
