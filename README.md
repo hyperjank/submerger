@@ -1,4 +1,4 @@
-##Bilingual Subtitle Player
+## Bilingual Subtitle Player
 
 A Linux video player with synchronized dual-language subtitles and AI-powered alignment/annotation.
 
@@ -12,6 +12,6 @@ Features
 
 * GStreamer/mpv playback with top/bottom rendering
 
-###Future: 
+### Future: 
 
 * on-demand slang, cultural notes, grammar analysis via LLM
