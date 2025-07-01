@@ -17,7 +17,7 @@ load_dotenv()  # look for a .env file in cwd or above
 # ``LLM_API_KEY``. The historical ``DEEPSEEK_API_KEY`` points to the public
 # DeepSeek service and can be enabled via ``--deepseek`` on the CLI.
 api_key = os.getenv("LLM_API_KEY")
-endpoint = os.getenv("LLM_API_BASE", "http://localhost:8000/v1")
+endpoint = os.getenv("LLM_API_BASE", "http://localhost:1234/v1")
 model = os.getenv("LLM_MODEL", "deepseek-chat")
 
 # Instantiate the client only when a key is provided so library imports do not
