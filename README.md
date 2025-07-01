@@ -12,6 +12,14 @@ Features
 
 * GStreamer/mpv playback with top/bottom rendering
 
-### Future: 
+### Installation
+
+Install the Python dependencies with pip:
+
+```bash
+pip install -r requirements.txt
+```
+
+### Future:
 
 * on-demand slang, cultural notes, grammar analysis via LLM
