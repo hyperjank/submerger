@@ -18,8 +18,8 @@ def make_cued(source_subtitle):
 def pair_subtitles(tl_cued, sl_cued):
     ''''''
     times = set()
-    for list in (tl_cued, sl_cued):
-        for cue in list:
+    for cue_list in (tl_cued, sl_cued):
+        for cue in cue_list:
             times.add(cue['start_time'])
             times.add(cue['end_time'])
     timeline = sorted(times)
