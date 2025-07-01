@@ -3,6 +3,8 @@ import os
 import json
 from typing import List, Tuple, Dict
 from dotenv import load_dotenv
+from difflib import SequenceMatcher
+from pypinyin import lazy_pinyin
 import pysubs2
 from openai import OpenAI
 
@@ -11,11 +13,9 @@ from openai import OpenAI
 # ──────────────────────────────────────────────────────────────────────────────
 load_dotenv()  # look for a .env file in cwd or above
 api_key = os.getenv("DEEPSEEK_API_KEY")
-if not api_key:
-    raise RuntimeError("DEEPSEEK_API_KEY not set in .env")
 endpoint = "https://api.deepseek.com/v1"
 model = "deepseek-chat"
-client = OpenAI(api_key=api_key, base_url=endpoint)
+client = OpenAI(api_key=api_key, base_url=endpoint) if api_key else None
 # ──────────────────────────────────────────────────────────────────────────────
 # 1) Utilities to write out SRTs
 # ──────────────────────────────────────────────────────────────────────────────
@@ -57,6 +57,35 @@ def windowed(chunks: List, size: int):
         yield i, chunks[i:i + size]
 
 
+# ------------------------------------------------------------------------------
+# Heuristic helpers
+# ------------------------------------------------------------------------------
+
+def _normalized(text: str) -> str:
+    """Return ascii/pinyin representation for rough cross-language matching."""
+    # convert Chinese characters to pinyin for a crude similarity check
+    if any('\u4e00' <= ch <= '\u9fff' for ch in text):
+        text = ' '.join(lazy_pinyin(text))
+    text = ''.join(ch.lower() if ch.isalnum() else ' ' for ch in text)
+    return ' '.join(text.split())
+
+
+def local_similarity(a: str, b: str) -> float:
+    """SequenceMatcher ratio after basic normalization."""
+    return SequenceMatcher(None, _normalized(a), _normalized(b)).ratio()
+
+
+def needs_llm(tl_seg: Dict, sl_seg: Dict, *, time_tol: int = 700, sim_thr: float = 0.3) -> bool:
+    """Return True if heuristic match fails and LLM should be consulted."""
+    # If timestamps are roughly aligned we accept the pair immediately
+    if abs(tl_seg['start_time'] - sl_seg['start_time']) <= time_tol and \
+       abs(tl_seg['end_time'] - sl_seg['end_time']) <= time_tol:
+        return False
+
+    # Fallback: compare romanized text similarity
+    return local_similarity(tl_seg['text'], sl_seg['text']) < sim_thr
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 3) Call your local LLM endpoint for alignment
 # ──────────────────────────────────────────────────────────────────────────────
@@ -95,6 +124,9 @@ def call_llm_for_alignment(
         )
     }
 
+    if client is None:
+        raise RuntimeError("LLM client not configured; set DEEPSEEK_API_KEY")
+
     resp = client.chat.completions.create(
         model=model,
         messages=[system, user],
@@ -129,42 +161,64 @@ def call_llm_for_alignment(
 def align_with_llm(
     collapsed: List[Dict],
     batch_size: int = 60,
-    model: str = model
+    model: str = model,
+    context: int = 2,
+    sim_threshold: float = 0.3,
+    time_tolerance: int = 700,
 ) -> List[Dict]:
-    """
-    Uses the LLM-returned start/end times instead of min/max, and rebuilds
-    each segment with those times.
-    """
-    tl_texts = [seg['tl_text'] for seg in collapsed]
-    sl_texts = [seg['sl_text'] for seg in collapsed]
-    raw_aligned = []
+    """Align using heuristics first, falling back to the LLM when needed."""
 
-    for offset, tl_window in windowed(tl_texts, batch_size):
-        sl_window = sl_texts[offset:offset+batch_size]
+    final = []
+    idx = 0
+    while idx < len(collapsed):
+        seg = collapsed[idx]
+
+        tl_seg = {
+            'start_time': seg['start_time'],
+            'end_time': seg['end_time'],
+            'text': seg['tl_text'],
+        }
+        sl_seg = {
+            'start_time': seg['start_time'],
+            'end_time': seg['end_time'],
+            'text': seg['sl_text'],
+        }
+
+        if seg['tl_text'] and seg['sl_text'] and not needs_llm(tl_seg, sl_seg, time_tol=time_tolerance, sim_thr=sim_threshold):
+            # heuristic says these already align
+            final.append(seg)
+            idx += 1
+            continue
+
+        # collect a window of lines around the mismatch and ask the LLM
+        start = max(0, idx - context)
+        end = min(len(collapsed), idx + context + 1)
+
+        tl_window = [s['tl_text'] for s in collapsed[start:end]]
+        sl_window = [s['sl_text'] for s in collapsed[start:end]]
         results = call_llm_for_alignment(tl_window, sl_window, model=model)
 
         for r in results:
-            a = collapsed[offset + r["tl_idx"]]
-            b = collapsed[offset + r["sl_idx"]]
-            raw_aligned.append({
-                "start_time": r["start_time"],
-                "end_time":   r["end_time"],
-                "tl_text":    a["tl_text"],
-                "sl_text":    b["sl_text"],
+            a = collapsed[start + r['tl_idx']]
+            b = collapsed[start + r['sl_idx']]
+            final.append({
+                'start_time': r['start_time'],
+                'end_time': r['end_time'],
+                'tl_text': a['tl_text'],
+                'sl_text': b['sl_text'],
             })
 
-    # final collapse of any adjacent identical entries
-    final = []
-    for seg in raw_aligned:
-        last = final[-1] if final else None
-        if last and \
-           last['tl_text'] == seg['tl_text'] and \
-           last['sl_text'] == seg['sl_text'] and \
-           last['end_time'] == seg['start_time']:
+        idx = end
+
+    # collapse any repeated adjacent segments from both paths
+    collapsed_final = []
+    for seg in final:
+        last = collapsed_final[-1] if collapsed_final else None
+        if last and last['tl_text'] == seg['tl_text'] and last['sl_text'] == seg['sl_text'] and last['end_time'] == seg['start_time']:
             last['end_time'] = seg['end_time']
         else:
-            final.append(seg)
-    return final
+            collapsed_final.append(seg)
+    return collapsed_final
 
 
 # ──────────────────────────────────────────────────────────────────────────────
