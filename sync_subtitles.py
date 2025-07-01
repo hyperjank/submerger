@@ -14,7 +14,7 @@ def make_cued(source_subtitle):
         cues.append({
             'start_time': ev.start,
             'end_time': ev.end,
-            'text': ev.text.strip(),
+            'text': ev.plaintext.strip(),
         })
     return sorted(cues, key=lambda c: c['start_time'])
 
@@ -115,14 +115,19 @@ def write_synced_subs(collapsed, outpath, tl_lang_code, sl_lang_code):
 
 
 def write_scripts(collapsed: List[Dict], outpath: str, tl_lang_code: str, sl_lang_code: str) -> None:
-    """Write plain text scripts for both languages."""
+    """Write plain text scripts for both languages without duplicate lines."""
     tl_lines: List[str] = []
     sl_lines: List[str] = []
+    last_tl = None
+    last_sl = None
     for seg in collapsed:
-        if seg['tl_text']:
+        if seg['tl_text'] and seg['tl_text'] != last_tl:
             tl_lines.append(seg['tl_text'])
-        if seg['sl_text']:
+            last_tl = seg['tl_text']
+        if seg['sl_text'] and seg['sl_text'] != last_sl:
             sl_lines.append(seg['sl_text'])
+            last_sl = seg['sl_text']
+
 
     with open(f"{outpath}_{tl_lang_code}.txt", "w", encoding="utf-8") as fh:
         fh.write("\n".join(tl_lines))
