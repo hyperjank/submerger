@@ -101,8 +101,8 @@ def test_dedupe_cues():
 
     deduped = dedupe_cues(cues)
     assert deduped == [
-        {'start_time': 0, 'end_time': 1000, 'text': 'hi'},
-        {'start_time': 2000, 'end_time': 3000, 'text': 'there'},
+        {'start_time': 0, 'end_time': 2000, 'text': 'hi'},
+        {'start_time': 2000, 'end_time': 4000, 'text': 'there'},
     ]
 
 

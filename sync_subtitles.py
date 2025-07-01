@@ -20,14 +20,20 @@ def make_cued(source_subtitle):
 
 
 def dedupe_cues(cues: List[Dict]) -> List[Dict]:
-    """Return a new list with consecutive duplicate texts removed."""
+    """Return a new list with consecutive duplicate texts merged."""
+
     deduped: List[Dict] = []
-    last_text = None
     for cue in cues:
-        if cue['text'] == last_text:
-            continue
-        deduped.append(cue)
-        last_text = cue['text']
+        if deduped and cue['text'] == deduped[-1]['text']:
+            # extend the previous cue window instead of keeping both
+            deduped[-1] = {
+                'start_time': deduped[-1]['start_time'],
+                'end_time': cue['end_time'],
+                'text': cue['text'],
+            }
+        else:
+            deduped.append(cue.copy())
+
     return deduped
 
 
