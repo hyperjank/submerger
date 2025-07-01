@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 import os
 import json
-from typing import List, Tuple, Dict
+from typing import List, Dict
 from dotenv import load_dotenv
 from difflib import SequenceMatcher
 from pypinyin import lazy_pinyin
-import pysubs2
 from openai import OpenAI
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -24,21 +23,7 @@ model = os.getenv("LLM_MODEL", "deepseek-chat")
 # Instantiate the client only when a key is provided so library imports do not
 # fail in environments without credentials (e.g. during testing).
 client = OpenAI(api_key=api_key, base_url=endpoint) if api_key else None
-# ──────────────────────────────────────────────────────────────────────────────
-# 1) Utilities to write out SRTs
-# ──────────────────────────────────────────────────────────────────────────────
 
-def write_synced_subs(segments: List[Dict], base_out: str, tl_lang: str, sl_lang: str):
-    tl_subs, sl_subs = pysubs2.SSAFile(), pysubs2.SSAFile()
-    for seg in segments:
-        tl_subs.events.append(pysubs2.SSAEvent(
-            start=seg['start_time'], end=seg['end_time'], text=seg['tl_text']
-        ))
-        sl_subs.events.append(pysubs2.SSAEvent(
-            start=seg['start_time'], end=seg['end_time'], text=seg['sl_text']
-        ))
-    tl_subs.save(f"{base_out}_{tl_lang}.srt")
-    sl_subs.save(f"{base_out}_{sl_lang}.srt")
 
 def sanitize_json(text: str) -> str:
     """
@@ -56,7 +41,7 @@ def sanitize_json(text: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 2) Windowing to keep prompts small enough
+# 1) Windowing to keep prompts small enough
 # ──────────────────────────────────────────────────────────────────────────────
 
 def windowed(chunks: List, size: int):
@@ -96,7 +81,7 @@ def needs_llm(tl_seg: Dict, sl_seg: Dict, *, time_tol: int = 700, sim_thr: float
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 3) Call your local LLM endpoint for alignment
+# 2) Call your local LLM endpoint for alignment
 # ──────────────────────────────────────────────────────────────────────────────
 
 def call_llm_for_alignment(
@@ -238,7 +223,7 @@ def align_with_llm(
 # ──────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    from sync_subtitles import make_cued, pair_subtitles
+    from sync_subtitles import make_cued, pair_subtitles, write_synced_subs
     import argparse
 
     parser = argparse.ArgumentParser(description="Align two subtitle files via an LLM")
