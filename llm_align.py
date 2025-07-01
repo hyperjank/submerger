@@ -119,6 +119,54 @@ def call_llm_for_alignment(tl_text: str, sl_text: str, model: str, max_tokens: i
                 return False
 
 
+def sample_segments(cues: List[Dict], window_ms: int = 10000) -> List[Dict]:
+    """Return cues from the first and last ``window_ms`` of the file."""
+
+    if not cues:
+        return []
+
+    total_end = cues[-1]['end_time']
+    selected = [
+        {'start_time': c['start_time'], 'end_time': c['end_time'], 'text': c['text']}
+        for c in cues
+        if c['start_time'] < window_ms or c['end_time'] > total_end - window_ms
+    ]
+    return selected
+
+
+def call_llm_for_cleanup(tl_sample: List[Dict], sl_sample: List[Dict], model: str, max_tokens: int = 200) -> str:
+    """Ask the LLM to remove ads and similar junk from the provided samples."""
+
+    if client is None:
+        raise RuntimeError(
+            "LLM client not configured; set LLM_API_KEY or DEEPSEEK_API_KEY"
+        )
+
+    system = {
+        "role": "system",
+        "content": (
+            "You clean subtitle files. Strip advertisements, translator signatures, URLs "
+            "and other extraneous text. Delete segments that are not part of the dialog or narration."
+        ),
+    }
+    user = {
+        "role": "user",
+        "content": json.dumps({"tl_sample": tl_sample, "sl_sample": sl_sample}, ensure_ascii=False),
+    }
+
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[system, user],
+        stream=False,
+        max_tokens=max_tokens,
+    )
+
+    if resp and resp.choices and resp.choices[0].message:
+        return resp.choices[0].message.content
+
+    return ""
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 4) Glue everything together
 # ──────────────────────────────────────────────────────────────────────────────
@@ -275,6 +323,15 @@ if __name__ == "__main__":
 
     tl_cues = make_cued(args.tl_file)
     sl_cues = make_cued(args.sl_file)
+
+    if client:
+        try:
+            tl_sample = sample_segments(tl_cues)
+            sl_sample = sample_segments(sl_cues)
+            response = call_llm_for_cleanup(tl_sample, sl_sample, model=model)
+            print("LLM cleanup suggestion:\n" + response)
+        except Exception as exc:
+            print(f"LLM cleanup failed: {exc}")
 
     raw_collapsed = pair_subtitles(tl_cues, sl_cues)
     llm_aligned = align_with_llm(raw_collapsed, batch_size=30)
