@@ -84,71 +84,39 @@ def needs_llm(tl_seg: Dict, sl_seg: Dict, *, time_tol: int = 700, sim_thr: float
 # 2) Call your local LLM endpoint for alignment
 # ──────────────────────────────────────────────────────────────────────────────
 
-def call_llm_for_alignment(
-    tl_texts: List[str],
-    sl_texts: List[str],
-    model: str,
-    max_tokens: int = 8192,
-) -> List[Dict]:
-    """Ask the LLM to align and re-time each pair of subtitle chunks.
-
-    Returns a list of dictionaries each containing:
-      tl_idx (int), sl_idx (int),
-      start_time (int ms), end_time (int ms).
-    """
-    system = {
-        "role": "system",
-        "content": (
-            "You are a subtitle alignment assistant. Given two lists of subtitle "
-            "chunks in different languages, return a JSON array describing the "
-            "aligned pairs with these fields:\n"
-            "- tl_idx and sl_idx (original indices)\n"
-            "- start_time and end_time in milliseconds (new display window)\n"
-            "Ensure both texts appear together and strip any ads or URLs."
-        )
-    }
-    user = {
-        "role": "user",
-        "content": (
-            "Target language chunks (index: text):\n"
-            + "\n".join(f"{i}: {t}" for i, t in enumerate(tl_texts))
-            + "\n\nSource language chunks (index: text):\n"
-            + "\n".join(f"{j}: {t}" for j, t in enumerate(sl_texts))
-            + "\n\nRespond with ONLY a JSON array like:\n"
-            "[{\"tl_idx\":0,\"sl_idx\":2,\"start_time\":1234,\"end_time\":5678}, …]"
-        )
-    }
+def call_llm_for_alignment(tl_text: str, sl_text: str, model: str, max_tokens: int = 5) -> bool:
+    """Ask the LLM if the source line is a translation of the target line."""
 
     if client is None:
         raise RuntimeError(
             "LLM client not configured; set LLM_API_KEY or DEEPSEEK_API_KEY"
         )
 
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[system, user],
-        stream=False,
-        max_tokens=max_tokens,
-    )
-    content = sanitize_json(resp.choices[0].message.content)
-    try:
-        items = json.loads(content)
-    except json.JSONDecodeError:
-        raise ValueError(f"Invalid JSON from LLM after sanitization:\n{content}")
+    system = {
+        "role": "system",
+        "content": (
+            "You decide whether two lines are translations of each other. "
+            "Respond only with 'Yes' or 'No'."
+        ),
+    }
+    user = {
+        "role": "user",
+        "content": f"TL: {tl_text}\nSL: {sl_text}"
+    }
 
-    # validate and return
-    aligned = []
-    for it in items:
-        for k in ("tl_idx", "sl_idx", "start_time", "end_time"):
-            if k not in it:
-                raise KeyError(f"Alignment object missing `{k}`: {it}")
-        aligned.append({
-            "tl_idx":     int(it["tl_idx"]),
-            "sl_idx":     int(it["sl_idx"]),
-            "start_time": int(it["start_time"]),
-            "end_time":   int(it["end_time"]),
-        })
-    return aligned
+    while True:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[system, user],
+            stream=False,
+            max_tokens=max_tokens,
+        )
+        if resp and resp.choices and resp.choices[0].message:
+            answer = resp.choices[0].message.content.strip().lower()
+            if answer.startswith("y"):
+                return True
+            if answer.startswith("n"):
+                return False
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -163,13 +131,10 @@ def align_with_llm(
     sim_threshold: float = 0.3,
     time_tolerance: int = 700,
 ) -> List[Dict]:
-    """Align using heuristics first, falling back to the LLM when needed."""
+    """Align subtitles using heuristics with optional LLM confirmation."""
 
-    final = []
-    idx = 0
-    while idx < len(collapsed):
-        seg = collapsed[idx]
-
+    final: List[Dict] = []
+    for seg in collapsed:
         tl_seg = {
             'start_time': seg['start_time'],
             'end_time': seg['end_time'],
@@ -181,31 +146,28 @@ def align_with_llm(
             'text': seg['sl_text'],
         }
 
-        if seg['tl_text'] and seg['sl_text'] and not needs_llm(tl_seg, sl_seg, time_tol=time_tolerance, sim_thr=sim_threshold):
-            # heuristic says these already align
-            final.append(seg)
-            idx += 1
-            continue
+        if seg['tl_text'] and seg['sl_text'] and needs_llm(tl_seg, sl_seg, time_tol=time_tolerance, sim_thr=sim_threshold):
+            try:
+                if not call_llm_for_alignment(seg['tl_text'], seg['sl_text'], model=model):
+                    # treat as two separate segments if LLM says "No"
+                    final.append({
+                        'start_time': seg['start_time'],
+                        'end_time': seg['end_time'],
+                        'tl_text': seg['tl_text'],
+                        'sl_text': '',
+                    })
+                    final.append({
+                        'start_time': seg['start_time'],
+                        'end_time': seg['end_time'],
+                        'tl_text': '',
+                        'sl_text': seg['sl_text'],
+                    })
+                    continue
+            except Exception:
+                # if the LLM call fails, fall back to heuristic result
+                pass
 
-        # collect a window of lines around the mismatch and ask the LLM
-        start = max(0, idx - context)
-        end = min(len(collapsed), idx + context + 1)
-
-        tl_window = [s['tl_text'] for s in collapsed[start:end]]
-        sl_window = [s['sl_text'] for s in collapsed[start:end]]
-        results = call_llm_for_alignment(tl_window, sl_window, model=model)
-
-        for r in results:
-            a = collapsed[start + r['tl_idx']]
-            b = collapsed[start + r['sl_idx']]
-            final.append({
-                'start_time': r['start_time'],
-                'end_time': r['end_time'],
-                'tl_text': a['tl_text'],
-                'sl_text': b['sl_text'],
-            })
-
-        idx = end
+        final.append(seg)
 
     # collapse any repeated adjacent segments from both paths
     collapsed_final = []

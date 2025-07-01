@@ -36,6 +36,9 @@ input files and language codes.
 Use the ``--deepseek`` flag if you want to send requests to the public
 DeepSeek service instead of the local API.
 
+The LLM is only consulted to answer simple yes/no questions about whether two
+lines match, keeping API calls minimal and fast.
+
 ### Future:
 
 * on-demand slang, cultural notes, grammar analysis via LLM
