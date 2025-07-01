@@ -28,6 +28,7 @@ def test_pair_basic():
     assert pair_subtitles(tl, sl) == expected
 
 
+
 def test_needs_llm_heuristic():
     from llm_align import needs_llm
 
@@ -38,3 +39,52 @@ def test_needs_llm_heuristic():
     bad_tl = {'start_time': 0, 'end_time': 1000, 'text': '你好'}
     bad_sl = {'start_time': 5000, 'end_time': 6000, 'text': 'world'}
     assert needs_llm(bad_tl, bad_sl)
+
+def test_make_cued_skips_empty(tmp_path):
+    from sync_subtitles import make_cued
+
+    sample = """1
+00:00:00,000 --> 00:00:01,000
+<i></i>
+
+2
+00:00:01,000 --> 00:00:02,000
+<b>   </b>
+
+3
+00:00:02,000 --> 00:00:03,000
+Real text
+"""
+    p = tmp_path / "a.srt"
+    p.write_text(sample)
+
+    cues = make_cued(str(p))
+
+    assert cues == [
+        {'start_time': 2000, 'end_time': 3000, 'text': 'Real text'}
+    ]
+
+
+def test_no_empty_segments_reach_pair(tmp_path):
+    from sync_subtitles import make_cued, pair_subtitles
+
+    srt = """1
+00:00:00,000 --> 00:00:01,000
+<i></i>
+
+2
+00:00:02,000 --> 00:00:03,000
+Hello
+"""
+    p = tmp_path / "t.srt"
+    p.write_text(srt)
+    tl = make_cued(str(p))
+    sl = [{'start_time': 2000, 'end_time': 3000, 'text': 'hola'}]
+
+    assert all(c['text'] for c in tl)
+
+    paired = pair_subtitles(tl, sl)
+    assert paired == [
+        {'start_time': 2000, 'end_time': 3000, 'tl_text': 'Hello', 'sl_text': 'hola'}
+    ]
+
