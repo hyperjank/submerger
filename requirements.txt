@@ -2,3 +2,4 @@ openai
 pysubs2
 python-dotenv
 pytest
+pypinyin

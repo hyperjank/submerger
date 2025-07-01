@@ -28,6 +28,18 @@ def test_pair_basic():
     assert pair_subtitles(tl, sl) == expected
 
 
+
+def test_needs_llm_heuristic():
+    from llm_align import needs_llm
+
+    good_tl = {'start_time': 0, 'end_time': 1000, 'text': 'Hello'}
+    good_sl = {'start_time': 0, 'end_time': 1000, 'text': 'hello'}
+    assert not needs_llm(good_tl, good_sl)
+
+    bad_tl = {'start_time': 0, 'end_time': 1000, 'text': '你好'}
+    bad_sl = {'start_time': 5000, 'end_time': 6000, 'text': 'world'}
+    assert needs_llm(bad_tl, bad_sl)
+
 def test_make_cued_skips_empty(tmp_path):
     from sync_subtitles import make_cued
 
@@ -75,3 +87,4 @@ Hello
     assert paired == [
         {'start_time': 2000, 'end_time': 3000, 'tl_text': 'Hello', 'sl_text': 'hola'}
     ]
+
