@@ -8,7 +8,7 @@ Features
 
 * AI-driven chunk alignment with custom timestamps
 
-* Export perfectly synced Chinese + English SRTs
+* Export perfectly synced L1 + L2 SRTs
 
 * GStreamer/mpv playback with top/bottom rendering
 
