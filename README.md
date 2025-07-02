@@ -11,6 +11,7 @@ Features
 * Export perfectly synced L1 + L2 SRTs
 
 * GStreamer/mpv playback with top/bottom rendering
+* Qt6/mpv player with scrolling subtitle columns
 
 ### Installation
 
@@ -18,6 +19,12 @@ Install the Python dependencies with pip:
 
 ```bash
 pip install -r requirements.txt
+```
+
+To play a video alongside two subtitle tracks use ``qt_mpv_scroll.py``::
+
+```bash
+python qt_mpv_scroll.py movie.mp4 subtitles_en.srt subtitles_es.srt
 ```
 
 ### Configuration
