@@ -4,6 +4,11 @@
 import sys
 import locale
 from typing import List
+
+# mpv's C API expects the LC_NUMERIC locale to be set to "C" before the module
+# is imported. If this isn't done the library aborts with a locale error.
+locale.setlocale(locale.LC_NUMERIC, "C")
+
 from PyQt6 import QtWidgets, QtCore, QtGui
 import mpv
 import pysubs2
@@ -75,9 +80,6 @@ def main(args: List[str]) -> int:
         print("Usage: qt_mpv_scroll.py video.mp4 tl.srt sl.srt")
         return 1
     _, video, tl_subs, sl_subs = args
-
-    # mpv requires the numeric locale to be "C" for reliable initialization.
-    locale.setlocale(locale.LC_NUMERIC, "C")
 
     app = QtWidgets.QApplication([args[0]])
     window = PlayerWindow(video, tl_subs, sl_subs)
