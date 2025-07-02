@@ -2,6 +2,7 @@
 """Simple Qt6/mpv player displaying subtitles in side columns."""
 
 import sys
+import locale
 from typing import List
 from PyQt6 import QtWidgets, QtCore, QtGui
 import mpv
@@ -74,6 +75,9 @@ def main(args: List[str]) -> int:
         print("Usage: qt_mpv_scroll.py video.mp4 tl.srt sl.srt")
         return 1
     _, video, tl_subs, sl_subs = args
+
+    # mpv requires the numeric locale to be "C" for reliable initialization.
+    locale.setlocale(locale.LC_NUMERIC, "C")
 
     app = QtWidgets.QApplication([args[0]])
     window = PlayerWindow(video, tl_subs, sl_subs)
