@@ -1,3 +1,5 @@
+pyqt6
+python-mpv
 openai
 pysubs2
 python-dotenv
