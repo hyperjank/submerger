@@ -4,7 +4,6 @@ import json
 from typing import List, Dict
 from dotenv import load_dotenv
 from difflib import SequenceMatcher
-from pypinyin import lazy_pinyin
 from openai import OpenAI
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -55,11 +54,7 @@ def windowed(chunks: List, size: int):
 # ------------------------------------------------------------------------------
 
 def _normalized(text: str) -> str:
-    """Return ASCII/pinyin representation for rough cross-language matching."""
-    # If the text contains Chinese characters convert them to pinyin for a crude
-    # similarity check.  Other scripts simply pass through.
-    if any('\u4e00' <= ch <= '\u9fff' for ch in text):
-        text = ' '.join(lazy_pinyin(text))
+    """Return a simplified ASCII representation for rough matching."""
     text = ''.join(ch.lower() if ch.isalnum() else ' ' for ch in text)
     return ' '.join(text.split())
 
