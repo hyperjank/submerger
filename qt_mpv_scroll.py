@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """Simple Qt6/mpv player displaying subtitles in side columns."""
+import os
+os.environ['LC_NUMERIC'] = 'C'
+
 
 import locale
 locale.setlocale(locale.LC_NUMERIC, "C")
