@@ -4,12 +4,11 @@
 import sys
 import locale
 from typing import List
+from PyQt6 import QtWidgets, QtCore, QtGui
 
-# mpv's C API expects the LC_NUMERIC locale to be set to "C" before the module
-# is imported. If this isn't done the library aborts with a locale error.
 locale.setlocale(locale.LC_NUMERIC, "C")
 
-from PyQt6 import QtWidgets, QtCore, QtGui
+
 import mpv
 import pysubs2
 
