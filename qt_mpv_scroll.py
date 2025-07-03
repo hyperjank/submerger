@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """Simple Qt6/mpv player displaying subtitles in side columns."""
 
-import sys
 import locale
-from typing import List
-from PyQt6 import QtWidgets, QtCore, QtGui
-
 locale.setlocale(locale.LC_NUMERIC, "C")
 
-
+import sys
+from typing import List
+from PyQt6 import QtWidgets, QtCore, QtGui
 import mpv
 import pysubs2
 
