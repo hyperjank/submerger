@@ -36,6 +36,78 @@ class VideoWidget(QtWidgets.QWidget):
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_NativeWindow)
         self.mpv = mpv.MPV(wid=int(self.winId()))
 
+    def toggle_pause(self) -> None:
+        """Toggle the pause state."""
+        try:
+            self.mpv.pause = not self.mpv.pause
+        except AttributeError:
+            # fall back to command if direct property fails
+            self.mpv.command("cycle", "pause")
+
+    def position(self) -> float:
+        """Current playback position in seconds."""
+        pos = self.mpv.time_pos
+        return float(pos) if pos is not None else 0.0
+
+    def duration(self) -> float:
+        """Total duration in seconds."""
+        dur = self.mpv.duration
+        return float(dur) if dur is not None else 0.0
+
+    def seek(self, seconds: float) -> None:
+        self.mpv.command("seek", seconds, "absolute")
+
+
+class PlaybackControls(QtWidgets.QWidget):
+    """Simple play/pause button and position slider."""
+
+    def __init__(self, video: VideoWidget) -> None:
+        super().__init__()
+        self._video = video
+
+        self.play_button = QtWidgets.QToolButton()
+        self.play_button.setIcon(self.style().standardIcon(
+            QtWidgets.QStyle.StandardPixmap.SP_MediaPause
+        ))
+        self.play_button.clicked.connect(self.toggle_play)
+
+        self.slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.slider.setRange(0, 0)
+        self.slider.sliderReleased.connect(self._slider_released)
+
+        layout = QtWidgets.QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.play_button)
+        layout.addWidget(self.slider, 1)
+        self.setLayout(layout)
+
+        self._update_timer = QtCore.QTimer(self)
+        self._update_timer.timeout.connect(self.update_position)
+        self._update_timer.start(500)
+
+    def toggle_play(self) -> None:
+        self._video.toggle_pause()
+        self.update_button()
+
+    def update_button(self) -> None:
+        paused = bool(self._video.mpv.pause)
+        icon = QtWidgets.QStyle.StandardPixmap.SP_MediaPlay if paused else QtWidgets.QStyle.StandardPixmap.SP_MediaPause
+        self.play_button.setIcon(self.style().standardIcon(icon))
+
+    def _slider_released(self) -> None:
+        pos = self.slider.value() / 1000.0
+        self._video.seek(pos)
+
+    def update_position(self) -> None:
+        dur = self._video.duration()
+        pos = self._video.position()
+        if dur:
+            self.slider.blockSignals(True)
+            self.slider.setRange(0, int(dur * 1000))
+            self.slider.setValue(int(pos * 1000))
+            self.slider.blockSignals(False)
+        self.update_button()
+
     def load(self, path: str) -> None:
         self.mpv.command("loadfile", path)
 
@@ -50,6 +122,7 @@ class PlayerWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("Bilingual Player")
 
         self.video_widget = VideoWidget()
+        self.controls = PlaybackControls(self.video_widget)
         self.tl_list = SubtitleColumn()
         self.sl_list = SubtitleColumn()
 
@@ -64,8 +137,15 @@ class PlayerWindow(QtWidgets.QMainWindow):
         subs_container = QtWidgets.QWidget()
         subs_container.setLayout(subs_layout)
 
+        video_layout = QtWidgets.QVBoxLayout()
+        video_layout.addWidget(self.video_widget, 1)
+        video_layout.addWidget(self.controls, 0)
+
+        video_container = QtWidgets.QWidget()
+        video_container.setLayout(video_layout)
+
         main_layout = QtWidgets.QHBoxLayout()
-        main_layout.addWidget(self.video_widget, 2)
+        main_layout.addWidget(video_container, 2)
         main_layout.addWidget(subs_container, 1)
 
         central = QtWidgets.QWidget()
@@ -73,6 +153,10 @@ class PlayerWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(central)
 
         self.video_widget.load(video)
+
+        QtGui.QShortcut(QtGui.QKeySequence("Space"), self).activated.connect(
+            self.controls.toggle_play
+        )
 
 
 def main(args: List[str]) -> int:

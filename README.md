@@ -26,6 +26,9 @@ To play a video alongside two subtitle tracks use ``qt_mpv_scroll.py``::
 ```bash
 python qt_mpv_scroll.py movie.mp4 subtitles_en.srt subtitles_es.srt
 ```
+The player now includes basic playback controls. Use the on-screen play/pause
+button or press the space bar to toggle playback. The slider lets you seek to a
+specific position.
 
 ### Configuration
 
