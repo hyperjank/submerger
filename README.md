@@ -7,7 +7,7 @@ Features
 * Parse and merge SRT/ASS files into unified timeline
 
 * AI-driven semantic alignment between subtitles in two languages
-
+* Regex cleanup of ads/URLs in the first and last 30 seconds
 * Export perfectly synced L1 + L2 SRTs
 
 * mpv playback with interactable subtitle display and custom placement
