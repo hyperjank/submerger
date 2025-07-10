@@ -73,8 +73,9 @@ class VideoWidget(QtWidgets.QWidget):
         """Instantiate mpv using the current native window id."""
         if self.mpv is None:
 
-            self.createWinId()
-            self.mpv = mpv.MPV(wid=str(int(self.winId())))
+            # Ensure the native window id exists on both PyQt6 and PySide6
+            wid = int(self.winId())
+            self.mpv = mpv.MPV(wid=wid)
             if self._pending_load:
                 self.mpv.command("loadfile", self._pending_load)
                 self._pending_load = None
