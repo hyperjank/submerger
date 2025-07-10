@@ -250,6 +250,7 @@ class PlayerWindow(QtWidgets.QMainWindow):
                 QtCore.Qt.DockWidgetArea.RightDockWidgetArea
                 | QtCore.Qt.DockWidgetArea.LeftDockWidgetArea
             )
+
             # Support PyQt6 and PySide6 while remaining compatible with PyQt5
             closable = (
                 QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetClosable
@@ -257,6 +258,7 @@ class PlayerWindow(QtWidgets.QMainWindow):
                 else QtWidgets.QDockWidget.DockWidgetClosable
             )
             dock.setFeatures(closable)
+
 
         self.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, self.tl_dock)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, self.sl_dock)
