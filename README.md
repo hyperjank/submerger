@@ -12,6 +12,7 @@ Features
 
 * mpv playback with interactable subtitle display and custom placement
 * Qt6/mpv player with a clean design
+* Wayland support via libmpv video embedding
 
 ### Installation
 

@@ -53,77 +53,82 @@ class SubtitleColumn(QtWidgets.QListWidget):
         self.setCurrentRow(-1)
 
 
-class VideoWidget(QtWidgets.QWidget):
-    """Widget hosting mpv playback."""
+class VideoWidget(QtWidgets.QOpenGLWidget):
+    """Widget hosting mpv playback via libmpv."""
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        # ensure the widget has a native window handle for mpv
-        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_NativeWindow)
-        # defer player creation until the widget is shown
-        self.mpv: mpv.MPV | None = None
-
+        self.setUpdateBehavior(QtWidgets.QOpenGLWidget.UpdateBehavior.PartialUpdate)
+        self.mpv: mpv.MPV = mpv.MPV(vo="libmpv")
+        self._render_ctx: mpv.MpvRenderContext | None = None
         self._pending_load: str | None = None
-
 
     # ------------------------------------------------------------------
     # internal helpers
     # ------------------------------------------------------------------
-    def _ensure_player(self) -> mpv.MPV:
-        """Instantiate mpv using the current native window id."""
-        if self.mpv is None:
+    def _init_render_context(self) -> None:
+        if self._render_ctx is None:
+            def _get_proc(_ctx: int, name: bytes) -> int:
+                addr = self.context().getProcAddress(name.decode())
+                return int(addr) if addr is not None else 0
 
-            # Ensure the native window id exists on both PyQt6 and PySide6
-            wid = int(self.winId())
-            self.mpv = mpv.MPV(wid=wid, force_window=False)
+            get_proc = mpv.MpvGlGetProcAddressFn(_get_proc)
+            params = {"get_proc_address": get_proc}
+            self._render_ctx = mpv.MpvRenderContext(self.mpv, "opengl", opengl_init_params=params)
+            self._render_ctx.update_cb = self.update
             if self._pending_load:
                 self.mpv.command("loadfile", self._pending_load)
                 self._pending_load = None
-        return self.mpv
 
-    def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
-        super().showEvent(event)
-        self._ensure_player()
+    def initializeGL(self) -> None:  # type: ignore[override]
+        self._init_render_context()
+
+    def paintGL(self) -> None:  # type: ignore[override]
+        if not self._render_ctx:
+            return
+        if self._render_ctx.update():
+            fbo = self.defaultFramebufferObject()
+            w = int(self.width() * self.devicePixelRatio())
+            h = int(self.height() * self.devicePixelRatio())
+            self._render_ctx.render(opengl_fbo={"fbo": fbo, "w": w, "h": h}, flip_y=True)
+            self._render_ctx.report_swap()
+
+    def resizeGL(self, w: int, h: int) -> None:  # type: ignore[override]
+        self.update()
 
 
     def toggle_pause(self) -> None:
         """Toggle the pause state."""
-        player = self._ensure_player()
         try:
-            player.pause = not player.pause
+            self.mpv.pause = not self.mpv.pause
         except AttributeError:
             # fall back to command if direct property fails
-            player.command("cycle", "pause")
+            self.mpv.command("cycle", "pause")
 
     def position(self) -> float:
         """Current playback position in seconds."""
-        player = self._ensure_player()
-        pos = player.time_pos
+        pos = self.mpv.time_pos
         return float(pos) if pos is not None else 0.0
 
     def duration(self) -> float:
         """Total duration in seconds."""
-        player = self._ensure_player()
-        dur = player.duration
+        dur = self.mpv.duration
         return float(dur) if dur is not None else 0.0
 
     def seek(self, seconds: float) -> None:
-        player = self._ensure_player()
-        player.command("seek", seconds, "absolute")
+        self.mpv.command("seek", seconds, "absolute")
 
     def seek_relative(self, offset: float) -> None:
         """Seek relative to the current position."""
-        player = self._ensure_player()
-        player.command("seek", offset, "relative")
+        self.mpv.command("seek", offset, "relative")
 
     def stop(self) -> None:
         """Stop playback and reset position."""
-        player = self._ensure_player()
-        player.command("stop")
-        player.pause = True
+        self.mpv.command("stop")
+        self.mpv.pause = True
     
     def load(self, path: str) -> None:
-        if self.mpv is None:
+        if self._render_ctx is None:
             self._pending_load = path
         else:
             self.mpv.command("loadfile", path)
