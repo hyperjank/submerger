@@ -15,7 +15,14 @@ import pysubs2
 
 
 class SubtitleColumn(QtWidgets.QListWidget):
-    """A read-only list widget to display subtitle lines."""
+    """A read-only list widget that highlights the active subtitle."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.setVerticalScrollMode(
+            QtWidgets.QAbstractItemView.ScrollMode.ScrollPerPixel
+        )
+        self._current_row = -1
 
     def load_subs(self, subtitle_file: str) -> None:
         subs = pysubs2.load(subtitle_file)
@@ -23,8 +30,27 @@ class SubtitleColumn(QtWidgets.QListWidget):
             text = ev.plaintext.strip()
             if text:
                 item = QtWidgets.QListWidgetItem(text)
-                item.setData(QtCore.Qt.ItemDataRole.UserRole, (ev.start, ev.end))
+                item.setData(
+                    QtCore.Qt.ItemDataRole.UserRole,
+                    (ev.start, ev.end),
+                )
                 self.addItem(item)
+
+    def update_active(self, pos_ms: int) -> None:
+        """Highlight and scroll to the subtitle covering ``pos_ms``."""
+        for row in range(self.count()):
+            item = self.item(row)
+            start, end = item.data(QtCore.Qt.ItemDataRole.UserRole)
+            if start <= pos_ms < end:
+                if row != self._current_row:
+                    self._current_row = row
+                    self.setCurrentRow(row)
+                    self.scrollToItem(
+                        item,
+                        QtWidgets.QAbstractItemView.ScrollHint.PositionAtCenter,
+                    )
+                return
+        self.setCurrentRow(-1)
 
 
 class VideoWidget(QtWidgets.QWidget):
@@ -34,6 +60,7 @@ class VideoWidget(QtWidgets.QWidget):
         super().__init__(parent)
         # ensure the widget has a native window handle for mpv
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_NativeWindow)
+        # pass the native window id so mpv renders inside this widget
         self.mpv = mpv.MPV(wid=int(self.winId()))
 
     def toggle_pause(self) -> None:
@@ -56,22 +83,59 @@ class VideoWidget(QtWidgets.QWidget):
 
     def seek(self, seconds: float) -> None:
         self.mpv.command("seek", seconds, "absolute")
+
+    def seek_relative(self, offset: float) -> None:
+        """Seek relative to the current position."""
+        self.mpv.command("seek", offset, "relative")
+
+    def stop(self) -> None:
+        """Stop playback and reset position."""
+        self.mpv.command("stop")
+        self.mpv.pause = True
     
     def load(self, path: str) -> None:
         self.mpv.command("loadfile", path)
 
 class PlaybackControls(QtWidgets.QWidget):
-    """Simple play/pause button and position slider."""
+    """Playback controls with a slider."""
+
+    positionChanged = QtCore.pyqtSignal(float)
 
     def __init__(self, video: VideoWidget) -> None:
         super().__init__()
         self._video = video
 
         self.play_button = QtWidgets.QToolButton()
-        self.play_button.setIcon(self.style().standardIcon(
-            QtWidgets.QStyle.StandardPixmap.SP_MediaPause
-        ))
+        self.play_button.setIcon(
+            self.style().standardIcon(
+                QtWidgets.QStyle.StandardPixmap.SP_MediaPause
+            )
+        )
         self.play_button.clicked.connect(self.toggle_play)
+
+        self.back_button = QtWidgets.QToolButton()
+        self.back_button.setIcon(
+            self.style().standardIcon(
+                QtWidgets.QStyle.StandardPixmap.SP_MediaSeekBackward
+            )
+        )
+        self.back_button.clicked.connect(lambda: self._video.seek_relative(-5))
+
+        self.stop_button = QtWidgets.QToolButton()
+        self.stop_button.setIcon(
+            self.style().standardIcon(
+                QtWidgets.QStyle.StandardPixmap.SP_MediaStop
+            )
+        )
+        self.stop_button.clicked.connect(self._video.stop)
+
+        self.forward_button = QtWidgets.QToolButton()
+        self.forward_button.setIcon(
+            self.style().standardIcon(
+                QtWidgets.QStyle.StandardPixmap.SP_MediaSeekForward
+            )
+        )
+        self.forward_button.clicked.connect(lambda: self._video.seek_relative(5))
 
         self.slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.slider.setRange(0, 0)
@@ -79,7 +143,10 @@ class PlaybackControls(QtWidgets.QWidget):
 
         layout = QtWidgets.QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.back_button)
         layout.addWidget(self.play_button)
+        layout.addWidget(self.stop_button)
+        layout.addWidget(self.forward_button)
         layout.addWidget(self.slider, 1)
         self.setLayout(layout)
 
@@ -109,10 +176,11 @@ class PlaybackControls(QtWidgets.QWidget):
             self.slider.setValue(int(pos * 1000))
             self.slider.blockSignals(False)
         self.update_button()
+        self.positionChanged.emit(pos)
 
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
-        self.mpv.terminate()
+        self._video.mpv.terminate()
         super().closeEvent(event)
 
 
@@ -154,9 +222,23 @@ class PlayerWindow(QtWidgets.QMainWindow):
 
         self.video_widget.load(video)
 
+        self.controls.positionChanged.connect(self._update_subs)
+
+        QtGui.QShortcut(QtGui.QKeySequence("Left"), self).activated.connect(
+            lambda: self.video_widget.seek_relative(-5)
+        )
+        QtGui.QShortcut(QtGui.QKeySequence("Right"), self).activated.connect(
+            lambda: self.video_widget.seek_relative(5)
+        )
+
         QtGui.QShortcut(QtGui.QKeySequence("Space"), self).activated.connect(
             self.controls.toggle_play
         )
+
+    def _update_subs(self, pos_s: float) -> None:
+        pos_ms = int(pos_s * 1000)
+        self.tl_list.update_active(pos_ms)
+        self.sl_list.update_active(pos_ms)
 
 
 def main(args: List[str]) -> int:
