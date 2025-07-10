@@ -10,6 +10,7 @@ locale.setlocale(locale.LC_NUMERIC, "C")
 import sys
 from typing import List
 from PyQt6 import QtWidgets, QtCore, QtGui
+from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 import mpv
 import pysubs2
 
@@ -53,12 +54,12 @@ class SubtitleColumn(QtWidgets.QListWidget):
         self.setCurrentRow(-1)
 
 
-class VideoWidget(QtWidgets.QOpenGLWidget):
+class VideoWidget(QOpenGLWidget):
     """Widget hosting mpv playback via libmpv."""
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setUpdateBehavior(QtWidgets.QOpenGLWidget.UpdateBehavior.PartialUpdate)
+        self.setUpdateBehavior(QOpenGLWidget.UpdateBehavior.PartialUpdate)
         self.mpv: mpv.MPV = mpv.MPV(vo="libmpv")
         self._render_ctx: mpv.MpvRenderContext | None = None
         self._pending_load: str | None = None
