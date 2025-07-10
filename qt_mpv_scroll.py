@@ -11,6 +11,7 @@ import sys
 from typing import List
 from PyQt6 import QtWidgets, QtCore, QtGui
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
+from PyQt6.QtCore import QProcess
 import mpv
 import pysubs2
 
@@ -272,6 +273,88 @@ def collapsed_to_events(collapsed: List[dict]) -> tuple[list[dict], list[dict]]:
     return tl_events, sl_events
 
 
+class AlignDialog(QtWidgets.QDialog):
+    """Dialog to run the alignment process in the background."""
+
+    loadRequested = QtCore.pyqtSignal(str)
+
+    def __init__(self, tl_path: str, sl_path: str, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.tl_path = tl_path
+        self.sl_path = sl_path
+        self.save_path = "final_synced"
+
+        self.setWindowTitle("Align Subtitles")
+
+        self.endpoint_combo = QtWidgets.QComboBox()
+        self.endpoint_combo.addItems(["Local", "DeepSeek"])
+
+        self.path_edit = QtWidgets.QLineEdit(self.save_path)
+
+        self.start_button = QtWidgets.QPushButton("Start Alignment")
+        self.load_button = QtWidgets.QPushButton("Load Aligned Subtitles")
+        self.load_button.setEnabled(False)
+
+        self.output_box = QtWidgets.QPlainTextEdit()
+        self.output_box.setReadOnly(True)
+
+        form = QtWidgets.QFormLayout()
+        form.addRow("Endpoint", self.endpoint_combo)
+        form.addRow("Save path", self.path_edit)
+
+        btns = QtWidgets.QHBoxLayout()
+        btns.addWidget(self.start_button)
+        btns.addWidget(self.load_button)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addLayout(form)
+        layout.addWidget(self.output_box, 1)
+        layout.addLayout(btns)
+
+        self.process = QProcess(self)
+        self.process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        self.process.readyRead.connect(self._read_output)
+        self.process.finished.connect(self._process_finished)
+
+        self.start_button.clicked.connect(self._start)
+        self.load_button.clicked.connect(self._emit_load)
+
+    # ------------------------------------------------------------------
+    def _read_output(self) -> None:
+        data = bytes(self.process.readAll()).decode(errors="ignore")
+        if data:
+            self.output_box.appendPlainText(data.rstrip())
+
+    def _process_finished(self) -> None:
+        self.output_box.appendPlainText("Alignment finished")
+        self.start_button.setEnabled(True)
+        self.load_button.setEnabled(True)
+
+    def _start(self) -> None:
+        if self.process.state() != QProcess.ProcessState.NotRunning:
+            return
+        self.save_path = self.path_edit.text().strip() or "final_synced"
+        cmd = [
+            sys.executable,
+            os.path.join(os.path.dirname(__file__), "llm_align.py"),
+            self.tl_path,
+            self.sl_path,
+            "--out",
+            self.save_path,
+        ]
+        if self.endpoint_combo.currentText() == "DeepSeek":
+            cmd.append("--deepseek")
+
+        self.output_box.clear()
+        self.output_box.appendPlainText("Starting alignment...")
+        self.start_button.setEnabled(False)
+        self.process.start(cmd[0], cmd[1:])
+
+    def _emit_load(self) -> None:
+        self.loadRequested.emit(self.save_path)
+        self.accept()
+
+
 class PlayerWindow(QtWidgets.QMainWindow):
     def __init__(self, video: str, tl_subs: str, sl_subs: str) -> None:
         super().__init__()
@@ -281,6 +364,7 @@ class PlayerWindow(QtWidgets.QMainWindow):
         self.controls = PlaybackControls(self.video_widget)
         self.tl_list = SubtitleColumn()
         self.sl_list = SubtitleColumn()
+        self._align_dialog = None
 
         self.video_path = video
         self.tl_path = tl_subs
@@ -395,18 +479,21 @@ class PlayerWindow(QtWidgets.QMainWindow):
                 self, "Missing Files", "Load TL and SL subtitles first."
             )
             return
+        self.video_widget.mpv.pause = True
 
-        from sync_subtitles import make_cued, dedupe_cues
-        from llm_align import regex_cleanup, semantic_align_cues
+        dlg = AlignDialog(self.tl_path, self.sl_path, self)
+        dlg.loadRequested.connect(self.load_aligned_subs)
+        dlg.show()
+        self._align_dialog = dlg
 
-        tl_cues = dedupe_cues(regex_cleanup(make_cued(self.tl_path)))
-        sl_cues = dedupe_cues(regex_cleanup(make_cued(self.sl_path)))
-
-        collapsed = semantic_align_cues(tl_cues, sl_cues)
-
-        tl_events, sl_events = collapsed_to_events(collapsed)
-        self.tl_list.load_events(tl_events)
-        self.sl_list.load_events(sl_events)
+    def load_aligned_subs(self, base: str) -> None:
+        tl = f"{base}_tl.srt"
+        sl = f"{base}_sl.srt"
+        if os.path.exists(tl) and os.path.exists(sl):
+            self.tl_path = tl
+            self.sl_path = sl
+            self.tl_list.load_subs(tl)
+            self.sl_list.load_subs(sl)
 
 
 def main(args: List[str]) -> int:
