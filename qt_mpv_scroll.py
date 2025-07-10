@@ -60,42 +60,68 @@ class VideoWidget(QtWidgets.QWidget):
         super().__init__(parent)
         # ensure the widget has a native window handle for mpv
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_NativeWindow)
-        # pass the native window id so mpv renders inside this widget
+        # defer player creation until the widget is shown
+        self.mpv: mpv.MPV | None = None
+        self._pending_load: str | None = None
 
-        self.mpv = mpv.MPV(wid=int(self.winId()))
+    # ------------------------------------------------------------------
+    # internal helpers
+    # ------------------------------------------------------------------
+    def _ensure_player(self) -> mpv.MPV:
+        """Instantiate mpv using the current native window id."""
+        if self.mpv is None:
+            self.createWinId()
+            self.mpv = mpv.MPV(wid=str(int(self.winId())))
+            if self._pending_load:
+                self.mpv.command("loadfile", self._pending_load)
+                self._pending_load = None
+        return self.mpv
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        self._ensure_player()
 
     def toggle_pause(self) -> None:
         """Toggle the pause state."""
+        player = self._ensure_player()
         try:
-            self.mpv.pause = not self.mpv.pause
+            player.pause = not player.pause
         except AttributeError:
             # fall back to command if direct property fails
-            self.mpv.command("cycle", "pause")
+            player.command("cycle", "pause")
 
     def position(self) -> float:
         """Current playback position in seconds."""
-        pos = self.mpv.time_pos
+        player = self._ensure_player()
+        pos = player.time_pos
         return float(pos) if pos is not None else 0.0
 
     def duration(self) -> float:
         """Total duration in seconds."""
-        dur = self.mpv.duration
+        player = self._ensure_player()
+        dur = player.duration
         return float(dur) if dur is not None else 0.0
 
     def seek(self, seconds: float) -> None:
-        self.mpv.command("seek", seconds, "absolute")
+        player = self._ensure_player()
+        player.command("seek", seconds, "absolute")
 
     def seek_relative(self, offset: float) -> None:
         """Seek relative to the current position."""
-        self.mpv.command("seek", offset, "relative")
+        player = self._ensure_player()
+        player.command("seek", offset, "relative")
 
     def stop(self) -> None:
         """Stop playback and reset position."""
-        self.mpv.command("stop")
-        self.mpv.pause = True
+        player = self._ensure_player()
+        player.command("stop")
+        player.pause = True
     
     def load(self, path: str) -> None:
-        self.mpv.command("loadfile", path)
+        if self.mpv is None:
+            self._pending_load = path
+        else:
+            self.mpv.command("loadfile", path)
 
 class PlaybackControls(QtWidgets.QWidget):
     """Playback controls with a slider."""
@@ -181,7 +207,8 @@ class PlaybackControls(QtWidgets.QWidget):
 
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
-        self._video.mpv.terminate()
+        if self._video.mpv:
+            self._video.mpv.terminate()
         super().closeEvent(event)
 
 
@@ -198,14 +225,6 @@ class PlayerWindow(QtWidgets.QMainWindow):
         self.tl_list.load_subs(tl_subs)
         self.sl_list.load_subs(sl_subs)
 
-        # layout: video on the left, two subtitle columns on the right
-        subs_layout = QtWidgets.QHBoxLayout()
-        subs_layout.addWidget(self.tl_list)
-        subs_layout.addWidget(self.sl_list)
-
-        subs_container = QtWidgets.QWidget()
-        subs_container.setLayout(subs_layout)
-
         video_layout = QtWidgets.QVBoxLayout()
         video_layout.addWidget(self.video_widget, 1)
         video_layout.addWidget(self.controls, 0)
@@ -213,13 +232,15 @@ class PlayerWindow(QtWidgets.QMainWindow):
         video_container = QtWidgets.QWidget()
         video_container.setLayout(video_layout)
 
-        main_layout = QtWidgets.QHBoxLayout()
-        main_layout.addWidget(video_container, 2)
-        main_layout.addWidget(subs_container, 1)
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        splitter.addWidget(video_container)
+        splitter.addWidget(self.tl_list)
+        splitter.addWidget(self.sl_list)
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(2, 1)
 
-        central = QtWidgets.QWidget()
-        central.setLayout(main_layout)
-        self.setCentralWidget(central)
+        self.setCentralWidget(splitter)
 
         self.video_widget.load(video)
 
