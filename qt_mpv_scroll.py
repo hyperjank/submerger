@@ -75,7 +75,7 @@ class VideoWidget(QtWidgets.QWidget):
 
             # Ensure the native window id exists on both PyQt6 and PySide6
             wid = int(self.winId())
-            self.mpv = mpv.MPV(wid=wid)
+            self.mpv = mpv.MPV(wid=wid, force_window=False)
             if self._pending_load:
                 self.mpv.command("loadfile", self._pending_load)
                 self._pending_load = None
@@ -238,15 +238,27 @@ class PlayerWindow(QtWidgets.QMainWindow):
         video_container = QtWidgets.QWidget()
         video_container.setLayout(video_layout)
 
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
-        splitter.addWidget(video_container)
-        splitter.addWidget(self.tl_list)
-        splitter.addWidget(self.sl_list)
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 1)
-        splitter.setStretchFactor(2, 1)
+        self.setCentralWidget(video_container)
 
-        self.setCentralWidget(splitter)
+        self.tl_dock = QtWidgets.QDockWidget("TL", self)
+        self.tl_dock.setWidget(self.tl_list)
+        self.sl_dock = QtWidgets.QDockWidget("SL", self)
+        self.sl_dock.setWidget(self.sl_list)
+
+        for dock in (self.tl_dock, self.sl_dock):
+            dock.setAllowedAreas(
+                QtCore.Qt.DockWidgetArea.RightDockWidgetArea
+                | QtCore.Qt.DockWidgetArea.LeftDockWidgetArea
+            )
+            dock.setFeatures(QtWidgets.QDockWidget.DockWidgetClosable)
+
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, self.tl_dock)
+        self.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, self.sl_dock)
+        self.splitDockWidget(self.tl_dock, self.sl_dock, QtCore.Qt.Orientation.Vertical)
+
+        view_menu = self.menuBar().addMenu("&View")
+        view_menu.addAction(self.tl_dock.toggleViewAction())
+        view_menu.addAction(self.sl_dock.toggleViewAction())
 
         self.video_widget.load(video)
 
