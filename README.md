@@ -22,11 +22,17 @@ Install the Python dependencies with pip:
 pip install -r requirements.txt
 ```
 
-To play a video alongside two subtitle tracks use ``qt_mpv_scroll.py``::
+To play a video alongside two subtitle tracks use ``qt_mpv_scroll.py``.  You can
+either pass the files on the command line or open them via the ``File`` menu::
 
 ```bash
 python qt_mpv_scroll.py movie.mp4 subtitles_en.srt subtitles_es.srt
 ```
+
+When launched without arguments the player will prompt you to choose the video
+and subtitle files.  The ``File`` menu also contains an ``Align Subtitles``
+action which uses the built-in alignment logic to synchronize the currently
+loaded tracks.
 The player now includes basic playback controls. Use the on-screen play/pause
 button or press the space bar to toggle playback. The slider lets you seek to a
 specific position.
