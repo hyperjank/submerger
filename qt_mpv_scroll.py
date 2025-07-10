@@ -60,42 +60,61 @@ class VideoWidget(QtWidgets.QWidget):
         super().__init__(parent)
         # ensure the widget has a native window handle for mpv
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_NativeWindow)
-        # pass the native window id so mpv renders inside this widget
+        # defer player creation until the widget is shown
+        self.mpv: mpv.MPV | None = None
 
-        self.mpv = mpv.MPV(wid=int(self.winId()))
+    # ------------------------------------------------------------------
+    # internal helpers
+    # ------------------------------------------------------------------
+    def _ensure_player(self) -> mpv.MPV:
+        """Instantiate mpv using the current native window id."""
+        if self.mpv is None:
+            self.mpv = mpv.MPV(wid=str(int(self.winId())))
+        return self.mpv
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
+        self._ensure_player()
+        super().showEvent(event)
 
     def toggle_pause(self) -> None:
         """Toggle the pause state."""
+        player = self._ensure_player()
         try:
-            self.mpv.pause = not self.mpv.pause
+            player.pause = not player.pause
         except AttributeError:
             # fall back to command if direct property fails
-            self.mpv.command("cycle", "pause")
+            player.command("cycle", "pause")
 
     def position(self) -> float:
         """Current playback position in seconds."""
-        pos = self.mpv.time_pos
+        player = self._ensure_player()
+        pos = player.time_pos
         return float(pos) if pos is not None else 0.0
 
     def duration(self) -> float:
         """Total duration in seconds."""
-        dur = self.mpv.duration
+        player = self._ensure_player()
+        dur = player.duration
         return float(dur) if dur is not None else 0.0
 
     def seek(self, seconds: float) -> None:
-        self.mpv.command("seek", seconds, "absolute")
+        player = self._ensure_player()
+        player.command("seek", seconds, "absolute")
 
     def seek_relative(self, offset: float) -> None:
         """Seek relative to the current position."""
-        self.mpv.command("seek", offset, "relative")
+        player = self._ensure_player()
+        player.command("seek", offset, "relative")
 
     def stop(self) -> None:
         """Stop playback and reset position."""
-        self.mpv.command("stop")
-        self.mpv.pause = True
+        player = self._ensure_player()
+        player.command("stop")
+        player.pause = True
     
     def load(self, path: str) -> None:
-        self.mpv.command("loadfile", path)
+        player = self._ensure_player()
+        player.command("loadfile", path)
 
 class PlaybackControls(QtWidgets.QWidget):
     """Playback controls with a slider."""
@@ -181,7 +200,8 @@ class PlaybackControls(QtWidgets.QWidget):
 
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
-        self._video.mpv.terminate()
+        if self._video.mpv:
+            self._video.mpv.terminate()
         super().closeEvent(event)
 
 
