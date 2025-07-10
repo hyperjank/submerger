@@ -61,6 +61,7 @@ class VideoWidget(QtWidgets.QWidget):
         # ensure the widget has a native window handle for mpv
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_NativeWindow)
         # pass the native window id so mpv renders inside this widget
+
         self.mpv = mpv.MPV(wid=int(self.winId()))
 
     def toggle_pause(self) -> None:

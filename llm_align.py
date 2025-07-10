@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import json
+import re
 from typing import List, Dict
 from dotenv import load_dotenv
 from difflib import SequenceMatcher
@@ -37,6 +38,35 @@ def sanitize_json(text: str) -> str:
         # drop the last fence
         lines = lines[:-1]
     return "\n".join(lines).strip()
+
+
+JUNK_RE = re.compile(
+    r"(https?://\S+|www\.\S+|presented by|translator)", re.IGNORECASE
+)
+
+
+def regex_cleanup(cues: List[Dict], window_ms: int = 30000) -> List[Dict]:
+    """Strip URLs and similar junk from the first/last ``window_ms`` of the file."""
+    if not cues:
+        return []
+
+    total_end = cues[-1]["end_time"]
+    cleaned: List[Dict] = []
+
+    for cue in cues:
+        if cue["start_time"] < window_ms or cue["end_time"] > total_end - window_ms:
+            text = JUNK_RE.sub("", cue["text"]).strip()
+            if not text:
+                continue
+            cleaned.append({
+                "start_time": cue["start_time"],
+                "end_time": cue["end_time"],
+                "text": text,
+            })
+        else:
+            cleaned.append(cue.copy())
+
+    return cleaned
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -313,12 +343,85 @@ def adjust_aligned_timings(collapsed: List[Dict], time_tolerance: int = 700) -> 
     return final
 
 
+def semantic_align_cues(
+    tl_cues: List[Dict],
+    sl_cues: List[Dict],
+    *,
+    model: str = model,
+    window_ms: int = 2000,
+    sim_threshold: float = 0.6,
+) -> List[Dict]:
+    """Return segments where matching TL/SL lines share the TL timestamps."""
+
+    aligned: List[Dict] = []
+    used_sl = set()
+    sl_index = 0
+
+    for tl in tl_cues:
+        match_idx = None
+        j = sl_index
+        while j < len(sl_cues) and sl_cues[j]["start_time"] <= tl["start_time"] + window_ms:
+            sl = sl_cues[j]
+            if j in used_sl:
+                j += 1
+                continue
+            if abs(sl["start_time"] - tl["start_time"]) <= window_ms:
+                if local_similarity(tl["text"], sl["text"]) >= sim_threshold:
+                    match_idx = j
+                    break
+                if client and needs_llm(
+                    {"start_time": tl["start_time"], "end_time": tl["end_time"], "text": tl["text"]},
+                    {"start_time": sl["start_time"], "end_time": sl["end_time"], "text": sl["text"]},
+                    time_tol=window_ms,
+                    sim_thr=sim_threshold,
+                ):
+                    try:
+                        if call_llm_for_alignment(tl["text"], sl["text"], model=model):
+                            match_idx = j
+                            break
+                    except Exception:
+                        pass
+            if sl["start_time"] > tl["start_time"] + window_ms:
+                break
+            j += 1
+
+        if match_idx is not None:
+            sl = sl_cues[match_idx]
+            used_sl.add(match_idx)
+            sl_index = match_idx + 1
+            aligned.append({
+                "start_time": tl["start_time"],
+                "end_time": tl["end_time"],
+                "tl_text": tl["text"],
+                "sl_text": sl["text"],
+            })
+        else:
+            aligned.append({
+                "start_time": tl["start_time"],
+                "end_time": tl["end_time"],
+                "tl_text": tl["text"],
+                "sl_text": "",
+            })
+
+    for idx, sl in enumerate(sl_cues):
+        if idx not in used_sl:
+            aligned.append({
+                "start_time": sl["start_time"],
+                "end_time": sl["end_time"],
+                "tl_text": "",
+                "sl_text": sl["text"],
+            })
+
+    aligned.sort(key=lambda s: s["start_time"])
+    return adjust_aligned_timings(aligned, time_tolerance=window_ms)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 5) Main routine
 # ──────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    from sync_subtitles import make_cued, pair_subtitles, write_synced_subs
+    from sync_subtitles import make_cued, dedupe_cues, write_synced_subs
     import argparse
 
     parser = argparse.ArgumentParser(description="Align two subtitle files via an LLM")
@@ -342,13 +445,13 @@ if __name__ == "__main__":
         model = os.getenv("LLM_MODEL", "deepseek-chat")
         client = OpenAI(api_key=api_key, base_url=endpoint) if api_key else None
 
-    tl_cues = make_cued(args.tl_file)
-    sl_cues = make_cued(args.sl_file)
+    tl_cues = dedupe_cues(regex_cleanup(make_cued(args.tl_file)))
+    sl_cues = dedupe_cues(regex_cleanup(make_cued(args.sl_file)))
 
     if client:
         try:
-            tl_sample = sample_segments(tl_cues)
-            sl_sample = sample_segments(sl_cues)
+            tl_sample = sample_segments(tl_cues, window_ms=30000)
+            sl_sample = sample_segments(sl_cues, window_ms=30000)
             response = call_llm_for_cleanup(tl_sample, sl_sample, model=model)
             print("LLM cleanup suggestion:\n" + response)
             try:
@@ -360,9 +463,7 @@ if __name__ == "__main__":
         except Exception as exc:
             print(f"LLM cleanup failed: {exc}")
 
-    raw_collapsed = pair_subtitles(tl_cues, sl_cues)
-    llm_aligned = align_with_llm(raw_collapsed, batch_size=30)
-    aligned = adjust_aligned_timings(llm_aligned)
+    aligned = semantic_align_cues(tl_cues, sl_cues, model=model)
 
     write_synced_subs(aligned, args.out, args.tl_code, args.sl_code)
 
