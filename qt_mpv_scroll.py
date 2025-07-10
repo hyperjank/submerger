@@ -62,7 +62,9 @@ class VideoWidget(QtWidgets.QWidget):
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_NativeWindow)
         # defer player creation until the widget is shown
         self.mpv: mpv.MPV | None = None
+
         self._pending_load: str | None = None
+
 
     # ------------------------------------------------------------------
     # internal helpers
@@ -70,6 +72,7 @@ class VideoWidget(QtWidgets.QWidget):
     def _ensure_player(self) -> mpv.MPV:
         """Instantiate mpv using the current native window id."""
         if self.mpv is None:
+
             self.createWinId()
             self.mpv = mpv.MPV(wid=str(int(self.winId())))
             if self._pending_load:
@@ -80,6 +83,7 @@ class VideoWidget(QtWidgets.QWidget):
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
         super().showEvent(event)
         self._ensure_player()
+
 
     def toggle_pause(self) -> None:
         """Toggle the pause state."""
@@ -122,6 +126,7 @@ class VideoWidget(QtWidgets.QWidget):
             self._pending_load = path
         else:
             self.mpv.command("loadfile", path)
+
 
 class PlaybackControls(QtWidgets.QWidget):
     """Playback controls with a slider."""
