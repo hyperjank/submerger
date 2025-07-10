@@ -27,15 +27,27 @@ class SubtitleColumn(QtWidgets.QListWidget):
 
     def load_subs(self, subtitle_file: str) -> None:
         subs = pysubs2.load(subtitle_file)
-        for ev in subs.events:
-            text = ev.plaintext.strip()
-            if text:
-                item = QtWidgets.QListWidgetItem(text)
-                item.setData(
-                    QtCore.Qt.ItemDataRole.UserRole,
-                    (ev.start, ev.end),
-                )
-                self.addItem(item)
+        events = [
+            {"start": ev.start, "end": ev.end, "text": ev.plaintext.strip()}
+            for ev in subs.events
+            if ev.plaintext.strip()
+        ]
+        self.load_events(events)
+
+    def load_events(self, events: List[dict]) -> None:
+        """Load subtitle events from a list of dicts."""
+        self.clear()
+        self._current_row = -1
+        for ev in events:
+            text = ev["text"].strip()
+            if not text:
+                continue
+            item = QtWidgets.QListWidgetItem(text)
+            item.setData(
+                QtCore.Qt.ItemDataRole.UserRole,
+                (ev["start"], ev["end"]),
+            )
+            self.addItem(item)
 
     def update_active(self, pos_ms: int) -> None:
         """Highlight and scroll to the subtitle covering ``pos_ms``."""
@@ -224,6 +236,42 @@ class PlaybackControls(QtWidgets.QWidget):
         super().closeEvent(event)
 
 
+def collapsed_to_events(collapsed: List[dict]) -> tuple[list[dict], list[dict]]:
+    """Convert collapsed TL/SL segments to event lists."""
+    tl_events: list[dict] = []
+    sl_events: list[dict] = []
+    last_tl = None
+    last_sl = None
+    for seg in collapsed:
+        if seg["tl_text"]:
+            if last_tl and last_tl["text"] == seg["tl_text"] and last_tl["end"] == seg["start_time"]:
+                last_tl["end"] = seg["end_time"]
+            else:
+                last_tl = {
+                    "start": seg["start_time"],
+                    "end": seg["end_time"],
+                    "text": seg["tl_text"],
+                }
+                tl_events.append(last_tl)
+        else:
+            last_tl = None
+
+        if seg["sl_text"]:
+            if last_sl and last_sl["text"] == seg["sl_text"] and last_sl["end"] == seg["start_time"]:
+                last_sl["end"] = seg["end_time"]
+            else:
+                last_sl = {
+                    "start": seg["start_time"],
+                    "end": seg["end_time"],
+                    "text": seg["sl_text"],
+                }
+                sl_events.append(last_sl)
+        else:
+            last_sl = None
+
+    return tl_events, sl_events
+
+
 class PlayerWindow(QtWidgets.QMainWindow):
     def __init__(self, video: str, tl_subs: str, sl_subs: str) -> None:
         super().__init__()
@@ -234,8 +282,14 @@ class PlayerWindow(QtWidgets.QMainWindow):
         self.tl_list = SubtitleColumn()
         self.sl_list = SubtitleColumn()
 
-        self.tl_list.load_subs(tl_subs)
-        self.sl_list.load_subs(sl_subs)
+        self.video_path = video
+        self.tl_path = tl_subs
+        self.sl_path = sl_subs
+
+        if tl_subs:
+            self.tl_list.load_subs(tl_subs)
+        if sl_subs:
+            self.sl_list.load_subs(sl_subs)
 
         video_layout = QtWidgets.QVBoxLayout()
         video_layout.addWidget(self.video_widget, 1)
@@ -274,7 +328,19 @@ class PlayerWindow(QtWidgets.QMainWindow):
         view_menu.addAction(self.tl_dock.toggleViewAction())
         view_menu.addAction(self.sl_dock.toggleViewAction())
 
-        self.video_widget.load(video)
+        file_menu = self.menuBar().addMenu("&File")
+        open_video = file_menu.addAction("Open Video...")
+        open_video.triggered.connect(self.open_video)
+        open_tl = file_menu.addAction("Open TL Subtitle...")
+        open_tl.triggered.connect(self.open_tl_sub)
+        open_sl = file_menu.addAction("Open SL Subtitle...")
+        open_sl.triggered.connect(self.open_sl_sub)
+        file_menu.addSeparator()
+        align = file_menu.addAction("Align Subtitles")
+        align.triggered.connect(self.align_subtitles)
+
+        if video:
+            self.video_widget.load(video)
 
         self.controls.positionChanged.connect(self._update_subs)
 
@@ -294,17 +360,74 @@ class PlayerWindow(QtWidgets.QMainWindow):
         self.tl_list.update_active(pos_ms)
         self.sl_list.update_active(pos_ms)
 
+    # ------------------------------------------------------------------
+    # File loading helpers
+    # ------------------------------------------------------------------
+    def open_video(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open Video")
+        if path:
+            self.video_path = path
+            self.video_widget.load(path)
+
+    def open_tl_sub(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Open TL Subtitle",
+            filter="Subtitles (*.srt *.ass)",
+        )
+        if path:
+            self.tl_path = path
+            self.tl_list.load_subs(path)
+
+    def open_sl_sub(self) -> None:
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Open SL Subtitle",
+            filter="Subtitles (*.srt *.ass)",
+        )
+        if path:
+            self.sl_path = path
+            self.sl_list.load_subs(path)
+
+    def align_subtitles(self) -> None:
+        if not (self.tl_path and self.sl_path):
+            QtWidgets.QMessageBox.warning(
+                self, "Missing Files", "Load TL and SL subtitles first."
+            )
+            return
+
+        from sync_subtitles import make_cued, dedupe_cues
+        from llm_align import regex_cleanup, semantic_align_cues
+
+        tl_cues = dedupe_cues(regex_cleanup(make_cued(self.tl_path)))
+        sl_cues = dedupe_cues(regex_cleanup(make_cued(self.sl_path)))
+
+        collapsed = semantic_align_cues(tl_cues, sl_cues)
+
+        tl_events, sl_events = collapsed_to_events(collapsed)
+        self.tl_list.load_events(tl_events)
+        self.sl_list.load_events(sl_events)
+
 
 def main(args: List[str]) -> int:
-    if len(args) != 4:
-        print("Usage: qt_mpv_scroll.py video.mp4 tl.srt sl.srt")
-        return 1
-    _, video, tl_subs, sl_subs = args
-
     app = QtWidgets.QApplication([args[0]])
+
+    if len(args) == 4:
+        _, video, tl_subs, sl_subs = args
+    else:
+        video = tl_subs = sl_subs = ""
+
     window = PlayerWindow(video, tl_subs, sl_subs)
     window.resize(1024, 600)
     window.show()
+
+    if not video:
+        window.open_video()
+    if not tl_subs:
+        window.open_tl_sub()
+    if not sl_subs:
+        window.open_sl_sub()
+
     return app.exec()
 
 
