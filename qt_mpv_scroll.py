@@ -63,18 +63,27 @@ class VideoWidget(QtWidgets.QWidget):
         # defer player creation until the widget is shown
         self.mpv: mpv.MPV | None = None
 
+        self._pending_load: str | None = None
+
+
     # ------------------------------------------------------------------
     # internal helpers
     # ------------------------------------------------------------------
     def _ensure_player(self) -> mpv.MPV:
         """Instantiate mpv using the current native window id."""
         if self.mpv is None:
+
+            self.createWinId()
             self.mpv = mpv.MPV(wid=str(int(self.winId())))
+            if self._pending_load:
+                self.mpv.command("loadfile", self._pending_load)
+                self._pending_load = None
         return self.mpv
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:  # type: ignore[override]
-        self._ensure_player()
         super().showEvent(event)
+        self._ensure_player()
+
 
     def toggle_pause(self) -> None:
         """Toggle the pause state."""
@@ -113,8 +122,11 @@ class VideoWidget(QtWidgets.QWidget):
         player.pause = True
     
     def load(self, path: str) -> None:
-        player = self._ensure_player()
-        player.command("loadfile", path)
+        if self.mpv is None:
+            self._pending_load = path
+        else:
+            self.mpv.command("loadfile", path)
+
 
 class PlaybackControls(QtWidgets.QWidget):
     """Playback controls with a slider."""
@@ -218,14 +230,6 @@ class PlayerWindow(QtWidgets.QMainWindow):
         self.tl_list.load_subs(tl_subs)
         self.sl_list.load_subs(sl_subs)
 
-        # layout: video on the left, two subtitle columns on the right
-        subs_layout = QtWidgets.QHBoxLayout()
-        subs_layout.addWidget(self.tl_list)
-        subs_layout.addWidget(self.sl_list)
-
-        subs_container = QtWidgets.QWidget()
-        subs_container.setLayout(subs_layout)
-
         video_layout = QtWidgets.QVBoxLayout()
         video_layout.addWidget(self.video_widget, 1)
         video_layout.addWidget(self.controls, 0)
@@ -233,13 +237,15 @@ class PlayerWindow(QtWidgets.QMainWindow):
         video_container = QtWidgets.QWidget()
         video_container.setLayout(video_layout)
 
-        main_layout = QtWidgets.QHBoxLayout()
-        main_layout.addWidget(video_container, 2)
-        main_layout.addWidget(subs_container, 1)
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
+        splitter.addWidget(video_container)
+        splitter.addWidget(self.tl_list)
+        splitter.addWidget(self.sl_list)
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(2, 1)
 
-        central = QtWidgets.QWidget()
-        central.setLayout(main_layout)
-        self.setCentralWidget(central)
+        self.setCentralWidget(splitter)
 
         self.video_widget.load(video)
 
