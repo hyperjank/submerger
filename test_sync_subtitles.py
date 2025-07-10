@@ -160,3 +160,35 @@ def test_adjust_aligned_timings_merges_nearby():
     ]
 
 
+def test_regex_cleanup_removes_urls():
+    from llm_align import regex_cleanup
+
+    cues = [
+        {'start_time': 0, 'end_time': 1000, 'text': 'visit http://example.com'},
+        {'start_time': 35000, 'end_time': 36000, 'text': 'end'},
+    ]
+
+    cleaned = regex_cleanup(cues, window_ms=30000)
+
+    assert cleaned == [
+        {'start_time': 0, 'end_time': 1000, 'text': 'visit'},
+        {'start_time': 35000, 'end_time': 36000, 'text': 'end'},
+    ]
+
+
+def test_semantic_align_cues_basic():
+    from llm_align import semantic_align_cues
+
+    tl = [
+        {'start_time': 0, 'end_time': 1000, 'text': 'hello'},
+    ]
+    sl = [
+        {'start_time': 50, 'end_time': 900, 'text': 'hello'},
+    ]
+
+    aligned = semantic_align_cues(tl, sl, window_ms=200)
+    assert aligned == [
+        {'start_time': 0, 'end_time': 1000, 'tl_text': 'hello', 'sl_text': 'hello'}
+    ]
+
+
