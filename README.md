@@ -1,17 +1,17 @@
 ## Bilingual Subtitle Player
 
-A Linux video player with synchronized dual-language subtitles and AI-powered alignment/annotation.
+A Linux video player with synchronized dual-language subtitles and AI-powered alignment/annotation, dictionary lookups for clicked words, AI explanation of highlighted phrases, and a plugin system for learning tools that display on video pause.
 
 Features
 
 * Parse and merge SRT/ASS files into unified timeline
 
-* AI-driven chunk alignment with custom timestamps
+* AI-driven semantic alignment between subtitles in two languages
 
 * Export perfectly synced L1 + L2 SRTs
 
-* GStreamer/mpv playback with top/bottom rendering
-* Qt6/mpv player with scrolling subtitle columns
+* mpv playback with interactable subtitle display and custom placement
+* Qt6/mpv player with a clean design
 
 ### Installation
 
@@ -46,10 +46,8 @@ input files and language codes.
 Use the ``--deepseek`` flag if you want to send requests to the public
 DeepSeek service instead of the local API.
 
-The LLM is only consulted to answer simple yes/no questions about whether two
-lines match and to optionally suggest removing intro/outro advertisements and
-translator signatures. This keeps API calls minimal and fast.
 
 ### Future:
 
 * on-demand slang, cultural notes, grammar analysis via LLM
+* plugin system for additional features
