@@ -250,7 +250,9 @@ class PlayerWindow(QtWidgets.QMainWindow):
                 QtCore.Qt.DockWidgetArea.RightDockWidgetArea
                 | QtCore.Qt.DockWidgetArea.LeftDockWidgetArea
             )
-            dock.setFeatures(QtWidgets.QDockWidget.DockWidgetClosable)
+            dock.setFeatures(
+                QtWidgets.QDockWidget.DockWidgetFeature.DockWidgetClosable
+            )
 
         self.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, self.tl_dock)
         self.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, self.sl_dock)
