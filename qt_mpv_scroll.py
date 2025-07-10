@@ -56,7 +56,9 @@ class VideoWidget(QtWidgets.QWidget):
 
     def seek(self, seconds: float) -> None:
         self.mpv.command("seek", seconds, "absolute")
-
+    
+    def load(self, path: str) -> None:
+        self.mpv.command("loadfile", path)
 
 class PlaybackControls(QtWidgets.QWidget):
     """Simple play/pause button and position slider."""
@@ -108,8 +110,6 @@ class PlaybackControls(QtWidgets.QWidget):
             self.slider.blockSignals(False)
         self.update_button()
 
-    def load(self, path: str) -> None:
-        self.mpv.command("loadfile", path)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
         self.mpv.terminate()
