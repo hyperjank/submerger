@@ -70,7 +70,7 @@ class VideoWidget(QOpenGLWidget):
     def _init_render_context(self) -> None:
         if self._render_ctx is None:
             def _get_proc(_ctx: int, name: bytes) -> int:
-                addr = self.context().getProcAddress(name.decode())
+                addr = self.context().getProcAddress(name)
                 return int(addr) if addr is not None else 0
 
             get_proc = mpv.MpvGlGetProcAddressFn(_get_proc)
