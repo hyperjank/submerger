@@ -44,7 +44,7 @@ section controls the language model credentials:
 
 * ``api_key`` – API token for the language model service.
 * ``api_base`` – Base URL of the API (defaults to ``http://localhost:1234/v1``).
-* ``model`` – Model name to use (defaults to ``deepseek-chat``).
+* ``model`` – Model name to use (defaults to ``qwen3-8b``).
 
 See [SETTINGS.md](SETTINGS.md) for additional settings.
 
