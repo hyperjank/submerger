@@ -250,9 +250,6 @@ class AlignDialog(QtWidgets.QDialog):
 
         self.setWindowTitle("Align Subtitles")
 
-        self.endpoint_combo = QtWidgets.QComboBox()
-        self.endpoint_combo.addItems(["Local", "DeepSeek"])
-
         self.path_edit = QtWidgets.QLineEdit(self.save_path)
         self.tl_code_edit = QtWidgets.QLineEdit("tl")
         self.sl_code_edit = QtWidgets.QLineEdit("sl")
@@ -265,7 +262,6 @@ class AlignDialog(QtWidgets.QDialog):
         self.output_box.setReadOnly(True)
 
         form = QtWidgets.QFormLayout()
-        form.addRow("Endpoint", self.endpoint_combo)
         form.addRow("Save path", self.path_edit)
         form.addRow("TL language", self.tl_code_edit)
         form.addRow("SL language", self.sl_code_edit)
@@ -316,8 +312,6 @@ class AlignDialog(QtWidgets.QDialog):
             "--sl-code",
             self.sl_code_edit.text().strip() or "sl",
         ]
-        if self.endpoint_combo.currentText() == "DeepSeek":
-            cmd.append("--deepseek")
 
         self.output_box.clear()
         self.output_box.appendPlainText("Starting alignment...")
