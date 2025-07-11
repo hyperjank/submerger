@@ -37,6 +37,10 @@ def sanitize_json(text: str) -> str:
     if lines and lines[-1].startswith("```"):
         # drop the last fence
         lines = lines[:-1]
+    # Remove any lines equal to "<think>" or "</think>" and anything between them
+    lines = [line for line in lines if not
+               (line.strip() == "<think>" or
+                line.strip() == "</think>")]
     return "\n".join(lines).strip()
 
 
@@ -175,7 +179,7 @@ def call_llm_for_cleanup(tl_sample: List[Dict], sl_sample: List[Dict], model: st
         "role": "system",
         "content": (
             "You clean subtitle files. Strip advertisements, translator signatures, URLs "
-            "and other extraneous text. Delete segments that are not part of the dialog or narration."
+            "and other extraneous text. Delete segments that are not part of the dialog or narration. /nothink"
         ),
     }
     user = {
