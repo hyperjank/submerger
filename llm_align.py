@@ -4,6 +4,7 @@ import json
 import re
 from pathlib import Path
 from typing import List, Dict
+from sync_subtitles import SubtitleCue
 from difflib import SequenceMatcher
 from openai import OpenAI
 
@@ -72,28 +73,24 @@ JUNK_RE = re.compile(
 )
 
 
-def regex_cleanup(cues: List[Dict], window_ms: int = 30000) -> List[Dict]:
+def regex_cleanup(cues: List[SubtitleCue], window_ms: int = 30000) -> List[SubtitleCue]:
     """Strip URLs and similar junk from the first/last ``window_ms`` of the file."""
     if not cues:
         return []
 
-    total_end = cues[-1]["end_time"]
-    cleaned: List[Dict] = []
+    total_end = cues[-1].end_time
+    cleaned: List[SubtitleCue] = []
     removed = 0
 
     for cue in cues:
-        if cue["start_time"] < window_ms or cue["end_time"] > total_end - window_ms:
-            text = JUNK_RE.sub("", cue["text"]).strip()
+        if cue.start_time < window_ms or cue.end_time > total_end - window_ms:
+            text = JUNK_RE.sub("", cue.text).strip()
             if not text:
                 removed += 1
                 continue
-            cleaned.append({
-                "start_time": cue["start_time"],
-                "end_time": cue["end_time"],
-                "text": text,
-            })
+            cleaned.append(SubtitleCue(cue.start_time, cue.end_time, text))
         else:
-            cleaned.append(cue.copy())
+            cleaned.append(SubtitleCue(cue.start_time, cue.end_time, cue.text))
 
     if removed:
         print(f"regex_cleanup: removed {removed} junk cues")
@@ -115,15 +112,15 @@ def local_similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, _normalized(a), _normalized(b)).ratio()
 
 
-def needs_llm(tl_seg: Dict, sl_seg: Dict, *, time_tol: int = 700, sim_thr: float = 0.3) -> bool:
+def needs_llm(tl_seg: SubtitleCue, sl_seg: SubtitleCue, *, time_tol: int = 700, sim_thr: float = 0.3) -> bool:
     """Return True if heuristic match fails and LLM should be consulted."""
     # If timestamps are roughly aligned we accept the pair immediately
-    if abs(tl_seg['start_time'] - sl_seg['start_time']) <= time_tol and \
-       abs(tl_seg['end_time'] - sl_seg['end_time']) <= time_tol:
+    if abs(tl_seg.start_time - sl_seg.start_time) <= time_tol and \
+       abs(tl_seg.end_time - sl_seg.end_time) <= time_tol:
         return False
 
     # Fallback: compare romanized text similarity
-    return local_similarity(tl_seg['text'], sl_seg['text']) < sim_thr
+    return local_similarity(tl_seg.text, sl_seg.text) < sim_thr
 
 # ------------------------------------------------------------------------------
 # Sentence helpers
@@ -132,34 +129,34 @@ def needs_llm(tl_seg: Dict, sl_seg: Dict, *, time_tol: int = 700, sim_thr: float
 SENT_END_RE = re.compile(r"[.!?。！？…]+['\"]?$")
 
 
-def combine_into_sentences(cues: List[Dict], gap_ms: int = 500) -> List[Dict]:
+def combine_into_sentences(cues: List[SubtitleCue], gap_ms: int = 500) -> List[SubtitleCue]:
     """Merge cues until they form complete sentences/utterances."""
 
     if not cues:
         return []
 
-    merged: List[Dict] = []
+    merged: List[SubtitleCue] = []
     buf: List[str] = []
-    start = cues[0]["start_time"]
-    end = cues[0]["end_time"]
+    start = cues[0].start_time
+    end = cues[0].end_time
 
     for cue in cues:
         if not buf:
-            start = cue["start_time"]
-        elif cue["start_time"] - end > gap_ms:
-            merged.append({"start_time": start, "end_time": end, "text": " ".join(buf)})
+            start = cue.start_time
+        elif cue.start_time - end > gap_ms:
+            merged.append(SubtitleCue(start, end, " ".join(buf)))
             buf = []
-            start = cue["start_time"]
+            start = cue.start_time
 
-        buf.append(cue["text"])
-        end = cue["end_time"]
+        buf.append(cue.text)
+        end = cue.end_time
 
-        if SENT_END_RE.search(cue["text"].strip()):
-            merged.append({"start_time": start, "end_time": end, "text": " ".join(buf)})
+        if SENT_END_RE.search(cue.text.strip()):
+            merged.append(SubtitleCue(start, end, " ".join(buf)))
             buf = []
 
     if buf:
-        merged.append({"start_time": start, "end_time": end, "text": " ".join(buf)})
+        merged.append(SubtitleCue(start, end, " ".join(buf)))
 
     print(f"combine_into_sentences: {len(cues)} cues -> {len(merged)} sentences")
     return merged
@@ -261,22 +258,22 @@ def call_llm_for_translation(
     return ""
 
 
-def sample_segments(cues: List[Dict], window_ms: int = 10000) -> List[Dict]:
+def sample_segments(cues: List[SubtitleCue], window_ms: int = 10000) -> List[SubtitleCue]:
     """Return cues from the first and last ``window_ms`` of the file."""
 
     if not cues:
         return []
 
-    total_end = cues[-1]['end_time']
+    total_end = cues[-1].end_time
     selected = [
-        {'start_time': c['start_time'], 'end_time': c['end_time'], 'text': c['text']}
+        SubtitleCue(c.start_time, c.end_time, c.text)
         for c in cues
-        if c['start_time'] < window_ms or c['end_time'] > total_end - window_ms
+        if c.start_time < window_ms or c.end_time > total_end - window_ms
     ]
     return selected
 
 
-def call_llm_for_cleanup(tl_sample: List[Dict], sl_sample: List[Dict], model: str, max_tokens: int = 1000) -> str:
+def call_llm_for_cleanup(tl_sample: List[SubtitleCue], sl_sample: List[SubtitleCue], model: str, max_tokens: int = 1000) -> str:
     """Ask the LLM to remove ads and similar junk from the provided samples."""
 
     client = get_client()
@@ -294,7 +291,10 @@ def call_llm_for_cleanup(tl_sample: List[Dict], sl_sample: List[Dict], model: st
     }
     user = {
         "role": "user",
-        "content": json.dumps({"tl_sample": tl_sample, "sl_sample": sl_sample}, ensure_ascii=False),
+        "content": json.dumps({
+            "tl_sample": [c.to_dict() for c in tl_sample],
+            "sl_sample": [c.to_dict() for c in sl_sample],
+        }, ensure_ascii=False),
     }
 
     resp = client.chat.completions.create(
@@ -310,25 +310,21 @@ def call_llm_for_cleanup(tl_sample: List[Dict], sl_sample: List[Dict], model: st
     return ""
 
 
-def apply_cleanup(cues: List[Dict], original: List[Dict], cleaned: List[Dict]) -> List[Dict]:
+def apply_cleanup(cues: List[SubtitleCue], original: List[SubtitleCue], cleaned: List[Dict]) -> List[SubtitleCue]:
     """Return ``cues`` with ``original`` segments replaced by ``cleaned``."""
 
-    orig_keys = {(c['start_time'], c['end_time']) for c in original}
+    orig_keys = {(c.start_time, c.end_time) for c in original}
     clean_map = {(c['start_time'], c['end_time']): c for c in cleaned}
-    updated: List[Dict] = []
+    updated: List[SubtitleCue] = []
 
     for cue in cues:
-        key = (cue['start_time'], cue['end_time'])
+        key = (cue.start_time, cue.end_time)
         if key in orig_keys:
             cleaned_cue = clean_map.get(key)
             if cleaned_cue:
                 text = cleaned_cue.get('text', '').strip()
                 if text:
-                    updated.append({
-                        'start_time': cue['start_time'],
-                        'end_time': cue['end_time'],
-                        'text': text,
-                    })
+                    updated.append(SubtitleCue(cue.start_time, cue.end_time, text))
             # omitted cue means it was removed
         else:
             updated.append(cue)
@@ -355,16 +351,8 @@ def align_with_llm(
         print(
             f"\nSegment {seg['start_time']}-{seg['end_time']}: TL='{seg['tl_text']}' | SL='{seg['sl_text']}'"
         )
-        tl_seg = {
-            'start_time': seg['start_time'],
-            'end_time': seg['end_time'],
-            'text': seg['tl_text'],
-        }
-        sl_seg = {
-            'start_time': seg['start_time'],
-            'end_time': seg['end_time'],
-            'text': seg['sl_text'],
-        }
+        tl_seg = SubtitleCue(seg['start_time'], seg['end_time'], seg['tl_text'])
+        sl_seg = SubtitleCue(seg['start_time'], seg['end_time'], seg['sl_text'])
 
         if seg['tl_text'] and seg['sl_text'] and needs_llm(tl_seg, sl_seg, time_tol=time_tolerance, sim_thr=sim_threshold):
             print("  Heuristic mismatch -> consulting LLM")
@@ -470,8 +458,8 @@ def adjust_aligned_timings(collapsed: List[Dict], time_tolerance: int = 700) -> 
 
 
 def sentence_level_align(
-    tl_cues: List[Dict],
-    sl_cues: List[Dict],
+    tl_cues: List[SubtitleCue],
+    sl_cues: List[SubtitleCue],
     *,
     tl_code: str = "tl",
     sl_code: str = "sl",
@@ -494,7 +482,7 @@ def sentence_level_align(
     j = 0
 
     for idx, sl in enumerate(sl_sent):
-        print(f"\nSL[{idx}] '{sl['text']}'")
+        print(f"\nSL[{idx}] '{sl.text}'")
         match_start = None
         match_end = None
         cand_text = ""
@@ -505,15 +493,15 @@ def sentence_level_align(
         for start in range(search_start, search_end):
             accum = ""
             for end in range(start, min(len(tl_sent), start + context + 1)):
-                accum = (accum + " " + tl_sent[end]["text"]).strip()
-                if local_similarity(accum, sl["text"]) >= sim_threshold:
+                accum = (accum + " " + tl_sent[end].text).strip()
+                if local_similarity(accum, sl.text) >= sim_threshold:
                     match_start = start
                     match_end = end
                     cand_text = accum
                     break
                 if client and needs_llm(
-                    {"start_time": 0, "end_time": 0, "text": accum},
-                    {"start_time": 0, "end_time": 0, "text": sl["text"]},
+                    SubtitleCue(0, 0, accum),
+                    SubtitleCue(0, 0, sl.text),
                     time_tol=999999,
                     sim_thr=sim_threshold,
                 ):
@@ -532,10 +520,10 @@ def sentence_level_align(
             print(f"  Matched TL[{match_start}:{match_end}] -> '{cand_text}'")
             aligned.append(
                 {
-                    "start_time": sl["start_time"],
-                    "end_time": sl["end_time"],
+                    "start_time": sl.start_time,
+                    "end_time": sl.end_time,
                     "tl_text": cand_text,
-                    "sl_text": sl["text"],
+                    "sl_text": sl.text,
                 }
             )
             for k in range(match_start, match_end + 1):
@@ -548,14 +536,14 @@ def sentence_level_align(
                 try:
                     window = 3000
                     context_lines = [
-                        t["text"]
+                        t.text
                         for t in tl_sent
-                        if t["start_time"] < sl["end_time"] + window
-                        and t["end_time"] > sl["start_time"] - window
+                        if t.start_time < sl.end_time + window
+                        and t.end_time > sl.start_time - window
                     ]
                     tl_block = "\n".join(context_lines)
                     translation = call_llm_for_translation(
-                        sl["text"],
+                        sl.text,
                         sl_code,
                         tl_code,
                         model=model,
@@ -565,10 +553,10 @@ def sentence_level_align(
                     print(f"  Translation failed: {exc}")
             aligned.append(
                 {
-                    "start_time": sl["start_time"],
-                    "end_time": sl["end_time"],
+                    "start_time": sl.start_time,
+                    "end_time": sl.end_time,
                     "tl_text": translation,
-                    "sl_text": sl["text"],
+                    "sl_text": sl.text,
                 }
             )
 
@@ -576,9 +564,9 @@ def sentence_level_align(
         if not used[idx]:
             aligned.append(
                 {
-                    "start_time": tl["start_time"],
-                    "end_time": tl["end_time"],
-                    "tl_text": tl["text"],
+                    "start_time": tl.start_time,
+                    "end_time": tl.end_time,
+                    "tl_text": tl.text,
                     "sl_text": "",
                 }
             )
@@ -588,8 +576,8 @@ def sentence_level_align(
 
 
 def semantic_align_cues(
-    tl_cues: List[Dict],
-    sl_cues: List[Dict],
+    tl_cues: List[SubtitleCue],
+    sl_cues: List[SubtitleCue],
     *,
     model: str = model,
     window_ms: int = 2000,
