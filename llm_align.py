@@ -52,11 +52,13 @@ def regex_cleanup(cues: List[Dict], window_ms: int = 30000) -> List[Dict]:
 
     total_end = cues[-1]["end_time"]
     cleaned: List[Dict] = []
+    removed = 0
 
     for cue in cues:
         if cue["start_time"] < window_ms or cue["end_time"] > total_end - window_ms:
             text = JUNK_RE.sub("", cue["text"]).strip()
             if not text:
+                removed += 1
                 continue
             cleaned.append({
                 "start_time": cue["start_time"],
@@ -66,6 +68,8 @@ def regex_cleanup(cues: List[Dict], window_ms: int = 30000) -> List[Dict]:
         else:
             cleaned.append(cue.copy())
 
+    if removed:
+        print(f"regex_cleanup: removed {removed} junk cues")
     return cleaned
 
 
@@ -232,8 +236,12 @@ def align_with_llm(
 ) -> List[Dict]:
     """Align subtitles using heuristics with optional LLM confirmation."""
 
+    print("Starting alignment phase...")
     final: List[Dict] = []
     for seg in collapsed:
+        print(
+            f"\nSegment {seg['start_time']}-{seg['end_time']}: TL='{seg['tl_text']}' | SL='{seg['sl_text']}'"
+        )
         tl_seg = {
             'start_time': seg['start_time'],
             'end_time': seg['end_time'],
@@ -246,8 +254,10 @@ def align_with_llm(
         }
 
         if seg['tl_text'] and seg['sl_text'] and needs_llm(tl_seg, sl_seg, time_tol=time_tolerance, sim_thr=sim_threshold):
+            print("  Heuristic mismatch -> consulting LLM")
             try:
                 if not call_llm_for_alignment(seg['tl_text'], seg['sl_text'], model=model):
+                    print("  LLM rejected pair - splitting segment")
                     # treat as two separate segments if LLM says "No"
                     final.append({
                         'start_time': seg['start_time'],
@@ -262,9 +272,9 @@ def align_with_llm(
                         'sl_text': seg['sl_text'],
                     })
                     continue
-            except Exception:
+            except Exception as exc:
                 # if the LLM call fails, fall back to heuristic result
-                pass
+                print(f"  LLM call failed: {exc}, keeping heuristic result")
 
         final.append(seg)
 
@@ -276,6 +286,7 @@ def align_with_llm(
             last['end_time'] = seg['end_time']
         else:
             collapsed_final.append(seg)
+    print(f"Alignment phase produced {len(collapsed_final)} segments")
     return collapsed_final
 
 
@@ -288,6 +299,7 @@ def adjust_aligned_timings(collapsed: List[Dict], time_tolerance: int = 700) -> 
     absorbed into the expanded window.
     """
 
+    print("\nAdjusting timings to merge neighbouring segments...")
     adjusted: List[Dict] = []
     i = 0
     while i < len(collapsed):
@@ -326,6 +338,7 @@ def adjust_aligned_timings(collapsed: List[Dict], time_tolerance: int = 700) -> 
                 'tl_text': seg['tl_text'],
                 'sl_text': seg['sl_text'],
             })
+            print(f"  Expanded pair to {start}-{end}")
             i = j
         else:
             adjusted.append(seg)
@@ -339,7 +352,7 @@ def adjust_aligned_timings(collapsed: List[Dict], time_tolerance: int = 700) -> 
             last['end_time'] = seg['end_time']
         else:
             final.append(seg)
-
+    print(f"Timing adjustment produced {len(final)} segments")
     return final
 
 
@@ -450,8 +463,10 @@ if __name__ == "__main__":
         model = os.getenv("LLM_MODEL", "deepseek-chat")
         client = OpenAI(api_key=api_key, base_url=endpoint) if api_key else None
 
-    tl_cues = dedupe_cues(regex_cleanup(make_cued(args.tl_file)))
+    tl_cues = dedupe_cues(make_cued(args.tl_file))
     sl_cues = dedupe_cues(regex_cleanup(make_cued(args.sl_file)))
+
+    print(f"Loaded {len(tl_cues)} TL cues and {len(sl_cues)} SL cues after cleanup")
 
     if client:
         try:
@@ -471,6 +486,7 @@ if __name__ == "__main__":
     # First merge both tracks into a unified timeline so gaps on either side are
     # preserved for the alignment step.
     collapsed = pair_subtitles(tl_cues, sl_cues)
+    print(f"Collapsing produced {len(collapsed)} initial segments")
 
     # Run the semantic/heuristic alignment over the paired timeline.
     aligned = align_with_llm(collapsed, model=model)

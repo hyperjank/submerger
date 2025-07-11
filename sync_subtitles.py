@@ -45,7 +45,12 @@ def pair_subtitles(tl_cued, sl_cued):
     function walks both lists with independent indexes so every cue is visited
     only once.  This linear pass is significantly faster than repeatedly
     searching the lists for the active cue at each point in the timeline.
+
+    Prints the number of cues from each side and the resulting merged length so
+    users can follow the pairing stage.
     """
+
+    print(f"Pairing subtitles: {len(tl_cued)} TL cues, {len(sl_cued)} SL cues")
 
     # Collect all boundaries that define the timeline
     times = {t for cue in tl_cued for t in (cue["start_time"], cue["end_time"])}
@@ -93,6 +98,7 @@ def pair_subtitles(tl_cued, sl_cued):
                 "sl_text": sl_text,
             })
 
+    print(f"Paired timeline created with {len(paired_subs)} segments")
     return paired_subs
 
 
