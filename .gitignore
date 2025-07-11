@@ -11,3 +11,5 @@ __pycache__/
 
 # Generated subtitle outputs
 *.srt
+synced_subs_*.txt
+.pytest_cache/

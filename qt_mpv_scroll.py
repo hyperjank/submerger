@@ -237,42 +237,6 @@ class PlaybackControls(QtWidgets.QWidget):
         super().closeEvent(event)
 
 
-def collapsed_to_events(collapsed: List[dict]) -> tuple[list[dict], list[dict]]:
-    """Convert collapsed TL/SL segments to event lists."""
-    tl_events: list[dict] = []
-    sl_events: list[dict] = []
-    last_tl = None
-    last_sl = None
-    for seg in collapsed:
-        if seg["tl_text"]:
-            if last_tl and last_tl["text"] == seg["tl_text"] and last_tl["end"] == seg["start_time"]:
-                last_tl["end"] = seg["end_time"]
-            else:
-                last_tl = {
-                    "start": seg["start_time"],
-                    "end": seg["end_time"],
-                    "text": seg["tl_text"],
-                }
-                tl_events.append(last_tl)
-        else:
-            last_tl = None
-
-        if seg["sl_text"]:
-            if last_sl and last_sl["text"] == seg["sl_text"] and last_sl["end"] == seg["start_time"]:
-                last_sl["end"] = seg["end_time"]
-            else:
-                last_sl = {
-                    "start": seg["start_time"],
-                    "end": seg["end_time"],
-                    "text": seg["sl_text"],
-                }
-                sl_events.append(last_sl)
-        else:
-            last_sl = None
-
-    return tl_events, sl_events
-
-
 class AlignDialog(QtWidgets.QDialog):
     """Dialog to run the alignment process in the background."""
 

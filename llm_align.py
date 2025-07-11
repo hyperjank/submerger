@@ -77,16 +77,6 @@ def regex_cleanup(cues: List[Dict], window_ms: int = 30000) -> List[Dict]:
     return cleaned
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 1) Windowing to keep prompts small enough
-# ──────────────────────────────────────────────────────────────────────────────
-
-def windowed(chunks: List, size: int):
-    """Yield (offset, sublist) for batching."""
-    for i in range(0, len(chunks), size):
-        yield i, chunks[i:i + size]
-
-
 # ------------------------------------------------------------------------------
 # Heuristic helpers
 # ------------------------------------------------------------------------------
@@ -137,6 +127,7 @@ def call_llm_for_alignment(tl_text: str, sl_text: str, model: str, max_tokens: i
         "content": f"TL: {tl_text}\nSL: {sl_text}"
     }
 
+    unknown = 0
     while True:
         resp = client.chat.completions.create(
             model=model,
@@ -144,12 +135,18 @@ def call_llm_for_alignment(tl_text: str, sl_text: str, model: str, max_tokens: i
             stream=False,
             max_tokens=max_tokens,
         )
+        answer = ""
         if resp and resp.choices and resp.choices[0].message:
             answer = resp.choices[0].message.content.strip().lower()
             if answer.startswith("y"):
                 return True
             if answer.startswith("n"):
                 return False
+        unknown += 1
+        if unknown >= 3:
+            print(f"Unrecognized LLM response: {answer!r} - giving up")
+            break
+    return False
 
 
 def sample_segments(cues: List[Dict], window_ms: int = 10000) -> List[Dict]:
@@ -232,7 +229,6 @@ def apply_cleanup(cues: List[Dict], original: List[Dict], cleaned: List[Dict]) -
 
 def align_with_llm(
     collapsed: List[Dict],
-    batch_size: int = 60,
     model: str = model,
     context: int = 2,
     sim_threshold: float = 0.3,
