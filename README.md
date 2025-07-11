@@ -51,8 +51,6 @@ See [SETTINGS.md](SETTINGS.md) for additional settings.
 You can then run ``python -m submerger.cli pair`` or ``python -m submerger.cli align`` with your two subtitle
 files regardless of language. Both commands provide options for the
 input files and language codes.
-Use the ``--deepseek`` flag if you want to send requests to the public
-DeepSeek service instead of the local API.
 
 
 ### Future:

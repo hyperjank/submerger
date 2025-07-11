@@ -153,12 +153,95 @@ def call_llm_select_target(
     )
     return resp.choices[0].message.content.strip()
 
+# ---------------------------------------------------------------------------
+# Additional helper functions used by the test suite
+
+def needs_llm(tl: sync.SubtitleCue, sl: sync.SubtitleCue, time_tolerance: int = 1000) -> bool:
+    """Heuristic to decide if LLM alignment is required."""
+    if abs(tl.start_time - sl.start_time) > time_tolerance:
+        return True
+    if not tl.text.isascii():
+        return True
+    return False
+
+
+def regex_cleanup(cues: List[sync.SubtitleCue], window_ms: int = 30000) -> List[sync.SubtitleCue]:
+    """Remove junk text like URLs in the first/last window."""
+    if not cues:
+        return []
+    total = cues[-1].end_time
+    out: List[sync.SubtitleCue] = []
+    for c in cues:
+        text = c.text
+        if c.start_time < window_ms or c.end_time > total - window_ms:
+            text = JUNK_RE.sub("", text).strip()
+        if text:
+            out.append(sync.SubtitleCue(c.start_time, c.end_time, text))
+    return out
+
+
+def semantic_align_cues(
+    tl: List[sync.SubtitleCue],
+    sl: List[sync.SubtitleCue],
+    window_ms: int = 200,
+) -> List[dict]:
+    """Naively align cues that overlap within ``window_ms``."""
+    out: List[dict] = []
+    i = j = 0
+    while i < len(tl) and j < len(sl):
+        t, s = tl[i], sl[j]
+        if abs(t.start_time - s.start_time) <= window_ms:
+            start = max(t.start_time, s.start_time)
+            end = min(t.end_time, s.end_time)
+            out.append({
+                "start_time": start,
+                "end_time": end,
+                "tl_text": t.text,
+                "sl_text": s.text,
+            })
+            i += 1
+            j += 1
+        elif t.start_time < s.start_time:
+            i += 1
+        else:
+            j += 1
+    return out
+
+
+def align_with_llm(collapsed: List[dict], time_tolerance: int = 100) -> List[dict]:
+    """Placeholder LLM alignment that simply returns the input."""
+    return list(collapsed)
+
+
+def adjust_aligned_timings(segments: List[dict], time_tolerance: int = 200) -> List[dict]:
+    """Merge adjacent segments when one side is empty and gap is small."""
+    if not segments:
+        return []
+    out = [segments[0].copy()]
+    for seg in segments[1:]:
+        last = out[-1]
+        if seg["start_time"] - last["end_time"] <= time_tolerance and (
+            not last["tl_text"] or not last["sl_text"]
+        ):
+            last["end_time"] = seg["end_time"]
+            if not last["tl_text"]:
+                last["tl_text"] = seg["tl_text"]
+            if not last["sl_text"]:
+                last["sl_text"] = seg["sl_text"]
+        elif seg["tl_text"] == last["tl_text"] and not seg["sl_text"]:
+            last["end_time"] = seg["end_time"]
+        elif seg["tl_text"] == last["tl_text"] and seg["sl_text"] == last["sl_text"]:
+            last["end_time"] = seg["end_time"]
+        else:
+            out.append(seg.copy())
+    return out
+
 # Main entry point
 
 def main(
     tl_file: str,
     sl_file: str,
-    *, tl_code: str='tl', sl_code: str='sl', out: str='final_synced', deepseek: bool=False
+    *, tl_code: str='tl', sl_code: str='sl', out: str='final_synced'
 ) -> None:
     # load + dedupe
     tl = sync.dedupe_cues(sync.make_cued(tl_file))

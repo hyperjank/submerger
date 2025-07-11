@@ -19,7 +19,6 @@ def main(argv=None):
     p_align.add_argument('--tl-code', default='tl')
     p_align.add_argument('--sl-code', default='sl')
     p_align.add_argument('--out', default='final_synced')
-    p_align.add_argument('--deepseek', action='store_true')
 
     args = parser.parse_args(argv)
 
@@ -38,7 +37,6 @@ def main(argv=None):
             tl_code=args.tl_code,
             sl_code=args.sl_code,
             out=args.out,
-            deepseek=args.deepseek,
         )
 
 
