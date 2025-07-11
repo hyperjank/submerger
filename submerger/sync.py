@@ -178,6 +178,15 @@ def write_scripts(collapsed: List[Dict], outpath: str, tl_lang_code: str, sl_lan
         fh.write("\n".join(sl_lines))
 
 
+def main(tl_file: str, sl_file: str, *, tl_code: str = "tl", sl_code: str = "sl", out: str = "synced_subs") -> None:
+    """Command-line entry point for subtitle pairing."""
+    tl_cues = dedupe_cues(make_cued(tl_file))
+    sl_cues = dedupe_cues(make_cued(sl_file))
+    paired_subs = pair_subtitles(tl_cues, sl_cues)
+    write_synced_subs(paired_subs, out, tl_code, sl_code)
+    write_scripts(paired_subs, out, tl_code, sl_code)
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -190,10 +199,6 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    tl_cues = dedupe_cues(make_cued(args.tl_file))
-    sl_cues = dedupe_cues(make_cued(args.sl_file))
-    paired_subs = pair_subtitles(tl_cues, sl_cues)
-    write_synced_subs(paired_subs, args.out, args.tl_code, args.sl_code)
-    write_scripts(paired_subs, args.out, args.tl_code, args.sl_code)
+    main(args.tl_file, args.sl_file, tl_code=args.tl_code, sl_code=args.sl_code, out=args.out)
 
 

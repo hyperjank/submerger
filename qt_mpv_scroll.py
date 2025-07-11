@@ -304,7 +304,9 @@ class AlignDialog(QtWidgets.QDialog):
         self.save_path = self.path_edit.text().strip() or "final_synced"
         cmd = [
             sys.executable,
-            os.path.join(os.path.dirname(__file__), "llm_align.py"),
+            "-m",
+            "submerger.cli",
+            "align",
             self.tl_path,
             self.sl_path,
             "--out",

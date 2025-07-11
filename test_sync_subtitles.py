@@ -1,7 +1,7 @@
 import importlib
 import pytest
-import llm_align
-from sync_subtitles import SubtitleCue
+import submerger.align as llm_align
+from submerger.sync import SubtitleCue
 
 
 @pytest.fixture(autouse=True)
@@ -11,12 +11,12 @@ def _stub_client(monkeypatch):
 # ensure module imports without side effects like loading test files
 
 def test_importable():
-    mod = importlib.import_module('sync_subtitles')
+    mod = importlib.import_module('submerger.sync')
     assert hasattr(mod, 'make_cued')
 
 
 def test_pair_basic():
-    from sync_subtitles import pair_subtitles
+    from submerger.sync import pair_subtitles
 
     tl = [
         SubtitleCue(0, 1000, 'A'),
@@ -38,7 +38,7 @@ def test_pair_basic():
 
 
 def test_needs_llm_heuristic():
-    from llm_align import needs_llm
+    from submerger.align import needs_llm
 
     good_tl = SubtitleCue(0, 1000, 'Hello')
     good_sl = SubtitleCue(0, 1000, 'hello')
@@ -49,7 +49,7 @@ def test_needs_llm_heuristic():
     assert needs_llm(bad_tl, bad_sl)
 
 def test_make_cued_skips_empty(tmp_path):
-    from sync_subtitles import make_cued
+    from submerger.sync import make_cued
 
     sample = """1
 00:00:00,000 --> 00:00:01,000
@@ -72,7 +72,7 @@ Real text
 
 
 def test_no_empty_segments_reach_pair(tmp_path):
-    from sync_subtitles import make_cued, pair_subtitles
+    from submerger.sync import make_cued, pair_subtitles
 
     srt = """1
 00:00:00,000 --> 00:00:01,000
@@ -96,7 +96,7 @@ Hello
 
 
 def test_dedupe_cues():
-    from sync_subtitles import dedupe_cues
+    from submerger.sync import dedupe_cues
 
     cues = [
         SubtitleCue(0, 1000, 'hi'),
@@ -113,7 +113,7 @@ def test_dedupe_cues():
 
 
 def test_write_scripts_dedupes(tmp_path):
-    from sync_subtitles import write_scripts
+    from submerger.sync import write_scripts
 
     collapsed = [
         {'start_time': 0, 'end_time': 1000, 'tl_text': 'hi', 'sl_text': 'hola'},
@@ -130,7 +130,7 @@ def test_write_scripts_dedupes(tmp_path):
 
 
 def test_write_synced_subs_dedupes(tmp_path):
-    from sync_subtitles import write_synced_subs
+    from submerger.sync import write_synced_subs
     import pysubs2
 
     collapsed = [
@@ -151,8 +151,8 @@ def test_write_synced_subs_dedupes(tmp_path):
 
 
 def test_adjust_aligned_timings_merges_nearby():
-    from sync_subtitles import pair_subtitles
-    from llm_align import align_with_llm, adjust_aligned_timings
+    from submerger.sync import pair_subtitles
+    from submerger.align import align_with_llm, adjust_aligned_timings
 
     tl = [SubtitleCue(0, 1000, 'hi')]
     sl = [SubtitleCue(50, 800, 'hola')]
@@ -167,7 +167,7 @@ def test_adjust_aligned_timings_merges_nearby():
 
 
 def test_regex_cleanup_removes_urls():
-    from llm_align import regex_cleanup
+    from submerger.align import regex_cleanup
 
     cues = [
         SubtitleCue(0, 1000, 'visit http://example.com'),
@@ -183,7 +183,7 @@ def test_regex_cleanup_removes_urls():
 
 
 def test_semantic_align_cues_basic():
-    from llm_align import semantic_align_cues
+    from submerger.align import semantic_align_cues
 
     tl = [SubtitleCue(0, 1000, 'hello')]
     sl = [SubtitleCue(50, 900, 'hello')]

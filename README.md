@@ -39,7 +39,7 @@ specific position.
 
 ### Configuration
 
-Project settings live in ``settings.json`` in the repository root. The ``llm``
+Project settings live in ``submerger/settings.json`` in the repository root. The ``llm``
 section controls the language model credentials:
 
 * ``api_key`` – API token for the language model service.
@@ -48,8 +48,8 @@ section controls the language model credentials:
 
 See [SETTINGS.md](SETTINGS.md) for additional settings.
 
-You can then run ``sync_subtitles.py`` or ``llm_align.py`` with your two subtitle
-files regardless of language. Both scripts provide command line options for the
+You can then run ``python -m submerger.cli pair`` or ``python -m submerger.cli align`` with your two subtitle
+files regardless of language. Both commands provide options for the
 input files and language codes.
 Use the ``--deepseek`` flag if you want to send requests to the public
 DeepSeek service instead of the local API.
