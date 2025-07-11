@@ -25,9 +25,10 @@ def get_client() -> OpenAI:
     llm = cfg.get("llm", {})
     key = llm.get("api_key")
     base = llm.get("api_base")
+    model = llm.get("model")
     if not key:
         raise RuntimeError("Please configure llm.api_key in settings.json")
-    return OpenAI(api_key=key, base_url=base)
+    return OpenAI(api_key=key, base_url=base, model=model)
 
 # Helpers to parse SRT timestamps
 
@@ -63,8 +64,7 @@ def strip_junk(cues: List[sync.SubtitleCue], window_ms: int = 30000) -> List[syn
 
 def call_llm_cleanup(
     tl_sample: List[sync.SubtitleCue],
-    sl_sample: List[sync.SubtitleCue],
-    model: str = "gpt-3.5-turbo"
+    sl_sample: List[sync.SubtitleCue]
 ) -> (List[sync.SubtitleCue], List[sync.SubtitleCue]):
     client = get_client()
     # build SRT-like blocks
@@ -135,8 +135,7 @@ def merge_utterances(cues: List[sync.SubtitleCue], gap_ms: int = 500) -> List[sy
 
 def call_llm_select_target(
     sl_text: str,
-    tl_block: List[sync.SubtitleCue],
-    model: str = "gpt-3.5-turbo"
+    tl_block: List[sync.SubtitleCue]
 ) -> str:
     client = get_client()
     block_text = '\n'.join(c.text for c in tl_block)
