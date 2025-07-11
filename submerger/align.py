@@ -1,157 +1,218 @@
 #!/usr/bin/env python3
 """
-Subtitle alignment pipeline:
-1. Load and parse SRT files into cues
-2. Strip garbage text from start/end
-3. Merge into full utterances based on sentence boundaries
-4. Extend timestamps to cover utterance duration
-5. Align target language cues to source utterances via LLM
-6. Write out synchronized SRTs
+LLM-assisted subtitle alignment (align.py)
+Integrates:
+ - regex-based junk stripping + LLM cleanup of first/last 30s
+ - utterance merging for SL
+ - block-based TL selection via small local LLM
 """
 import re
 import json
 from pathlib import Path
-from typing import List, Tuple
-import pysubs2
+from typing import List
 from openai import OpenAI
+from . import sync
 
-# ---------------------------- Helpers ----------------------------
-class Cue:
-    def __init__(self, start: int, end: int, text: str):
-        self.start = start
-        self.end = end
-        self.text = text.strip()
-
-    def to_dict(self):
-        return {"start": self.start, "end": self.end, "text": self.text}
-
-# Regex for junk cleanup
+# Patterns
 JUNK_RE = re.compile(r"(https?://\S+|www\.\S+|presented by|translator)", re.IGNORECASE)
 SENT_END_RE = re.compile(r"[\.\!\?。！？…]+['\"]?$")
+TS_RE = re.compile(r"(?P<h>\d{2}):(?P<m>\d{2}):(?P<s>\d{2}),(?P<ms>\d{3})")
 
-def load_srt(path: str) -> List[Cue]:
-    subs = pysubs2.load(path)
-    return [Cue(c.start, c.end, c.text) for c in subs]
+# LLM client loader
+def get_client() -> OpenAI:
+    cfg_path = Path(__file__).with_name("settings.json")
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
+    llm = cfg.get("llm", {})
+    key = llm.get("api_key")
+    base = llm.get("api_base")
+    if not key:
+        raise RuntimeError("Please configure llm.api_key in settings.json")
+    return OpenAI(api_key=key, base_url=base)
 
+# Helpers to parse SRT timestamps
 
-def write_srt(cues: List[Cue], path: str) -> None:
-    subs = pysubs2.SSAFile()
-    for idx, c in enumerate(cues, start=1):
-        subs.append(pysubs2.SSAEvent(start=c.start, end=c.end, text=c.text))
-    subs.save(path)
+def ts_to_ms(ts: str) -> int:
+    m = TS_RE.match(ts)
+    if not m:
+        return 0
+    h, mi, s, ms = m.group('h','m','s','ms')
+    return (int(h)*3600 + int(mi)*60 + int(s)) * 1000 + int(ms)
 
-
-def strip_junk(cues: List[Cue], window_ms: int = 30000) -> List[Cue]:
+# Sample first/last window of cues
+def sample_segments(cues: List[sync.SubtitleCue], window_ms: int = 30000) -> List[sync.SubtitleCue]:
     if not cues:
         return []
-    total_end = cues[-1].end
-    cleaned = []
+    total = cues[-1].end_time
+    return [c for c in cues if c.start_time < window_ms or c.end_time > total - window_ms]
+
+# 1) Strip junk via regex
+def strip_junk(cues: List[sync.SubtitleCue], window_ms: int = 30000) -> List[sync.SubtitleCue]:
+    if not cues:
+        return []
+    total = cues[-1].end_time
+    out = []
     for c in cues:
-        if c.start < window_ms or c.end > total_end - window_ms:
-            txt = JUNK_RE.sub("", c.text).strip()
-            if txt:
-                cleaned.append(Cue(c.start, c.end, txt))
-        else:
-            cleaned.append(c)
-    return cleaned
+        txt = c.text
+        if c.start_time < window_ms or c.end_time > total - window_ms:
+            txt = JUNK_RE.sub("", txt).strip()
+        if txt:
+            out.append(sync.SubtitleCue(c.start_time, c.end_time, txt))
+    return out
 
+# 2) LLM cleanup of sample
 
-def merge_utterances(cues: List[Cue], gap_ms: int = 500) -> List[Cue]:
-    merged = []
-    buf = []
-    start = 0
-    end = 0
-    for c in cues:
-        if not buf:
-            start, end = c.start, c.end
-        # if large gap, flush buffer
-        if buf and c.start - end > gap_ms:
-            merged.append(Cue(start, end, " ".join(buf)))
-            buf = []
-            start = c.start
-        buf.append(c.text)
-        end = c.end
-        # if sentence ends, flush
-        if SENT_END_RE.search(c.text):
-            merged.append(Cue(start, end, " ".join(buf)))
-            buf = []
-    if buf:
-        merged.append(Cue(start, end, " ".join(buf)))
-    return merged
-
-
-def extend_timestamps(cues: List[Cue]) -> List[Cue]:
-    # Already cues cover utterance spans; nothing additional for now
-    return cues
-
-# ---------------------- LLM Alignment ----------------------
-def get_client() -> OpenAI:
-    cfg = json.loads(Path("settings.json").read_text()) if Path("settings.json").exists() else {}
-    api_key = cfg.get("llm", {}).get("api_key")
-    base = cfg.get("llm", {}).get("api_base", None)
-    return OpenAI(api_key=api_key, base_url=base) if api_key else None
-
-
-def call_llm_select_target(sl_text: str, tl_block: str, model: str = "gpt-4o") -> List[dict]:
+def call_llm_cleanup(
+    tl_sample: List[sync.SubtitleCue],
+    sl_sample: List[sync.SubtitleCue],
+    model: str = "gpt-3.5-turbo"
+) -> (List[sync.SubtitleCue], List[sync.SubtitleCue]):
     client = get_client()
-    system = {"role": "system", "content": (
-        "You are given a source utterance and a block of target language subtitle lines. "
-        "Select the line or concatenation of lines from the target that best corresponds semantically to the source. "
-        "Return a JSON array of objects with fields start, end, text matching the original target timestamps."
-    )}
-    user = {"role": "user", "content": json.dumps({"source": sl_text, "target_block": tl_block}, ensure_ascii=False)}
+    # build SRT-like blocks
+    def block(cues, tag):
+        lines = [f"{tag}"]
+        for c in cues:
+            # format hh:mm:ss,ms --> hh:mm:ss,ms text
+            start = f"{c.start_time//3600000:02}:{(c.start_time//60000)%60:02}:{(c.start_time//1000)%60:02},{c.start_time%1000:03}"
+            end   = f"{c.end_time//3600000:02}:{(c.end_time//60000)%60:02}:{(c.end_time//1000)%60:02},{c.end_time%1000:03}"
+            lines.append(f"{start} --> {end} {c.text}")
+        return "\n".join(lines)
+
+    prompt = (
+        "You are given two subtitle samples. Remove lines that are ads, group credits, or other non-dialog."
+        "Return cleaned samples in the same format, preserving tags."
+        f"\n\n{block(tl_sample,'===TL===')}\n\n{block(sl_sample,'===SL===')}"
+    )
     resp = client.chat.completions.create(
         model=model,
-        messages=[system, user],
-        max_tokens=512,
+        messages=[{'role':'user','content':prompt}],
         temperature=0.0,
+        max_tokens=1500,
     )
-    out = resp.choices[0].message.content.strip()
-    # sanitize fences
-    if out.startswith("```"):
-        out = "\n".join(out.splitlines()[1:-1])
-    return json.loads(out)
+    text = resp.choices[0].message.content
+    # split back
+    tl_cleaned, sl_cleaned = [], []
+    section = None
+    for line in text.splitlines():
+        if line.strip() == '===TL===':
+            section = 'tl'
+            continue
+        if line.strip() == '===SL===':
+            section = 'sl'
+            continue
+        if not section or '-->' not in line:
+            continue
+        ts, rest = line.split('-->',1)
+        start_ts = ts.strip()
+        end_and_txt = rest.strip().split(' ',1)
+        if len(end_and_txt)<2:
+            continue
+        end_ts, txt = end_and_txt
+        cue = sync.SubtitleCue(ts_to_ms(start_ts), ts_to_ms(end_ts), txt.strip())
+        (tl_cleaned if section=='tl' else sl_cleaned).append(cue)
+    return tl_cleaned, sl_cleaned
 
+# 3) Merge SL into utterances
+def merge_utterances(cues: List[sync.SubtitleCue], gap_ms: int = 500) -> List[sync.SubtitleCue]:
+    merged, buf = [], []
+    start = end = 0
+    for c in cues:
+        if not buf:
+            start, end = c.start_time, c.end_time
+        if buf and c.start_time - end > gap_ms:
+            merged.append(sync.SubtitleCue(start, end, ' '.join(buf)))
+            buf = []
+            start = c.start_time
+        buf.append(c.text)
+        end = c.end_time
+        if SENT_END_RE.search(c.text):
+            merged.append(sync.SubtitleCue(start, end, ' '.join(buf)))
+            buf = []
+    if buf:
+        merged.append(sync.SubtitleCue(start, end, ' '.join(buf)))
+    return merged
 
-def align_cues(sl_cues: List[Cue], tl_cues: List[Cue], context: int = 2) -> Tuple[List[Cue], List[Cue]]:
-    new_sl = []
-    new_tl = []
-    for sl in sl_cues:
-        # collect overlapping tl cues plus neighbors
-        idxs = [i for i, t in enumerate(tl_cues) if not (t.end < sl.start - 1 or t.start > sl.end + 1)]
-        # add context
-        idxs = list(range(max(0, min(idxs or [0]) - context), min(len(tl_cues), max(idxs or [0]) + context + 1)))
-        block = [t.to_dict() for i, t in enumerate(tl_cues) if i in idxs]
-        tl_block = json.dumps(block, ensure_ascii=False)
-        selected = call_llm_select_target(sl.text, tl_block)
-        # apply source timestamps
-        new_sl.append(Cue(sl.start, sl.end, sl.text))
-        merged_text = " ".join(item['text'] for item in selected)
-        new_tl.append(Cue(sl.start, sl.end, merged_text))
-    return new_sl, new_tl
+# 4) Call LLM to select matching TL text block
 
-# ------------------------- Main -------------------------
-def main(tl_path: str, sl_path: str, out_base: str = "final_synced"):
-    # load
-    tl = load_srt(tl_path)
-    sl = load_srt(sl_path)
-    # clean
+def call_llm_select_target(
+    sl_text: str,
+    tl_block: List[sync.SubtitleCue],
+    model: str = "gpt-3.5-turbo"
+) -> str:
+    client = get_client()
+    block_text = '\n'.join(c.text for c in tl_block)
+    prompt = (
+        f"Source utterance: {sl_text}\n\n"
+        f"Here is a block of target subtitles (text only):\n{block_text}\n\n"
+        "Please return only the part of the above target text that best matches the source utterance."
+    )
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[{'role':'user','content':prompt}],
+        temperature=0.0,
+        max_tokens=500,
+    )
+    return resp.choices[0].message.content.strip()
+
+# Main entry point
+
+def main(
+    tl_file: str,
+    sl_file: str,
+    *, tl_code: str='tl', sl_code: str='sl', out: str='final_synced', deepseek: bool=False
+) -> None:
+    # load + dedupe
+    tl = sync.dedupe_cues(sync.make_cued(tl_file))
+    sl = sync.dedupe_cues(sync.make_cued(sl_file))
+
+    # regex strip
     tl = strip_junk(tl)
     sl = strip_junk(sl)
-    # utterances
-    sl_utts = merge_utterances(sl)
-    # align
-    out_sl, out_tl = align_cues(sl_utts, tl)
-    # write
-    write_srt(out_tl, f"{out_base}_tl.srt")
-    write_srt(out_sl, f"{out_base}_sl.srt")
-    print("Alignment complete.")
 
-if __name__ == '__main__':
-    import argparse
-    p = argparse.ArgumentParser()
-    p.add_argument('tl_file')
-    p.add_argument('sl_file')
-    p.add_argument('--out', default='final_synced')
-    args = p.parse_args()
-    main(args.tl_file, args.sl_file, out_base=args.out)
+    # LLM cleanup on first/last 30s
+    tl_sample = sample_segments(tl)
+    sl_sample = sample_segments(sl)
+    try:
+        tl_cl, sl_cl = call_llm_cleanup(tl_sample, sl_sample)
+        # replace sample portions in full lists
+        # drop any original cue with same start_time that's not in cleaned
+        starts = {c.start_time for c in tl_cl}
+        tl = [c for c in tl if c.start_time not in {s.start_time for s in tl_sample}] + tl_cl
+        starts = {c.start_time for c in sl_cl}
+        sl = [c for c in sl if c.start_time not in {s.start_time for s in sl_sample}] + sl_cl
+        # re-sort
+        tl.sort(key=lambda c: c.start_time)
+        sl.sort(key=lambda c: c.start_time)
+    except Exception:
+        pass
+
+    # utterance merge
+    sl_utts = merge_utterances(sl)
+
+    # build aligned list
+    aligned = []
+    for utt in sl_utts:
+        # find overlapping TL indices
+        overlaps = [i for i,c in enumerate(tl) if not (c.end_time < utt.start_time or c.start_time > utt.end_time)]
+        if overlaps:
+            lo, hi = max(min(overlaps)-2,0), min(max(overlaps)+3,len(tl))
+            tl_block = tl[lo:hi]
+        else:
+            tl_block = []
+        try:
+            sel = call_llm_select_target(utt.text, tl_block)
+        except Exception:
+            sel = ' '.join(c.text for c in tl_block)
+        aligned.append({
+            'start_time': utt.start_time,
+            'end_time': utt.end_time,
+            'tl_text': sel,
+            'sl_text': utt.text,
+        })
+
+    # write out
+    sync.write_synced_subs(aligned, out, tl_code, sl_code)
+    print(f"Done! Wrote {out}_{tl_code}.srt and {out}_{sl_code}.srt")
+
+if __name__=='__main__':
+    import sys
+    main(*sys.argv[1:])
