@@ -298,7 +298,7 @@ def apply_cleanup(cues: List[Dict], original: List[Dict], cleaned: List[Dict]) -
 def align_with_llm(
     collapsed: List[Dict],
     model: str = model,
-    context: int = 2,
+    context: int = 3,
     sim_threshold: float = 0.3,
     time_tolerance: int = 700,
 ) -> List[Dict]:
@@ -431,7 +431,7 @@ def sentence_level_align(
     tl_code: str = "tl",
     sl_code: str = "sl",
     model: str = model,
-    context: int = 2,
+    context: int = 3,
     sim_threshold: float = 0.6,
 ) -> List[Dict]:
     """Align subtitle cues at the sentence level using fuzzy matching."""
@@ -443,21 +443,25 @@ def sentence_level_align(
     )
 
     aligned: List[Dict] = []
+    used = [False] * len(tl_sent)
     j = 0
 
     for idx, sl in enumerate(sl_sent):
         print(f"\nSL[{idx}] '{sl['text']}'")
-        match = None
-        best_end = None
+        match_start = None
+        match_end = None
         cand_text = ""
 
-        for start in range(j, min(len(tl_sent), j + context + 1)):
+        search_start = max(0, j - context)
+        search_end = min(len(tl_sent), j + context + 1)
+
+        for start in range(search_start, search_end):
             accum = ""
             for end in range(start, min(len(tl_sent), start + context + 1)):
                 accum = (accum + " " + tl_sent[end]["text"]).strip()
                 if local_similarity(accum, sl["text"]) >= sim_threshold:
-                    match = start
-                    best_end = end
+                    match_start = start
+                    match_end = end
                     cand_text = accum
                     break
                 if client and needs_llm(
@@ -468,26 +472,28 @@ def sentence_level_align(
                 ):
                     try:
                         if call_llm_for_alignment(accum, sl["text"], model=model):
-                            match = start
-                            best_end = end
+                            match_start = start
+                            match_end = end
                             cand_text = accum
                             break
                     except Exception as exc:
                         print(f"  LLM alignment failed: {exc}")
-            if match is not None:
+            if match_start is not None:
                 break
 
-        if match is not None and best_end is not None:
-            print(f"  Matched TL[{match}:{best_end}] -> '{cand_text}'")
+        if match_start is not None and match_end is not None:
+            print(f"  Matched TL[{match_start}:{match_end}] -> '{cand_text}'")
             aligned.append(
                 {
-                    "start_time": tl_sent[match]["start_time"],
-                    "end_time": tl_sent[best_end]["end_time"],
+                    "start_time": sl["start_time"],
+                    "end_time": sl["end_time"],
                     "tl_text": cand_text,
                     "sl_text": sl["text"],
                 }
             )
-            j = best_end + 1
+            for k in range(match_start, match_end + 1):
+                used[k] = True
+            j = match_end + 1
         else:
             print("  No TL match found -> translating")
             translation = ""
@@ -507,15 +513,16 @@ def sentence_level_align(
                 }
             )
 
-    for remaining in tl_sent[j:]:
-        aligned.append(
-            {
-                "start_time": remaining["start_time"],
-                "end_time": remaining["end_time"],
-                "tl_text": remaining["text"],
-                "sl_text": "",
-            }
-        )
+    for idx, tl in enumerate(tl_sent):
+        if not used[idx]:
+            aligned.append(
+                {
+                    "start_time": tl["start_time"],
+                    "end_time": tl["end_time"],
+                    "tl_text": tl["text"],
+                    "sl_text": "",
+                }
+            )
 
     aligned.sort(key=lambda s: s["start_time"])
     return aligned
@@ -537,7 +544,7 @@ def semantic_align_cues(
         tl_code="tl",
         sl_code="sl",
         model=model,
-        context=2,
+        context=3,
         sim_threshold=sim_threshold,
     )
 

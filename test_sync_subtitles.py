@@ -188,7 +188,7 @@ def test_semantic_align_cues_basic():
 
     aligned = semantic_align_cues(tl, sl, window_ms=200)
     assert aligned == [
-        {'start_time': 0, 'end_time': 1000, 'tl_text': 'hello', 'sl_text': 'hello'}
+        {'start_time': 50, 'end_time': 900, 'tl_text': 'hello', 'sl_text': 'hello'}
     ]
 
 

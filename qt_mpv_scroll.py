@@ -254,6 +254,8 @@ class AlignDialog(QtWidgets.QDialog):
         self.endpoint_combo.addItems(["Local", "DeepSeek"])
 
         self.path_edit = QtWidgets.QLineEdit(self.save_path)
+        self.tl_code_edit = QtWidgets.QLineEdit("tl")
+        self.sl_code_edit = QtWidgets.QLineEdit("sl")
 
         self.start_button = QtWidgets.QPushButton("Start Alignment")
         self.load_button = QtWidgets.QPushButton("Load Aligned Subtitles")
@@ -265,6 +267,8 @@ class AlignDialog(QtWidgets.QDialog):
         form = QtWidgets.QFormLayout()
         form.addRow("Endpoint", self.endpoint_combo)
         form.addRow("Save path", self.path_edit)
+        form.addRow("TL language", self.tl_code_edit)
+        form.addRow("SL language", self.sl_code_edit)
 
         btns = QtWidgets.QHBoxLayout()
         btns.addWidget(self.start_button)
@@ -305,6 +309,10 @@ class AlignDialog(QtWidgets.QDialog):
             self.sl_path,
             "--out",
             self.save_path,
+            "--tl-code",
+            self.tl_code_edit.text().strip() or "tl",
+            "--sl-code",
+            self.sl_code_edit.text().strip() or "sl",
         ]
         if self.endpoint_combo.currentText() == "DeepSeek":
             cmd.append("--deepseek")
