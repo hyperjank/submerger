@@ -6,7 +6,7 @@ from submerger.sync import SubtitleCue
 
 @pytest.fixture(autouse=True)
 def _stub_client(monkeypatch):
-    monkeypatch.setattr(llm_align, "get_client", lambda: None)
+    monkeypatch.setattr(llm_align, "get_client", lambda: (None, None))
 
 # ensure module imports without side effects like loading test files
 

@@ -19,7 +19,8 @@ SENT_END_RE = re.compile(r"[\.\!\?。！？…]+['\"]?$")
 TS_RE = re.compile(r"(?P<h>\d{2}):(?P<m>\d{2}):(?P<s>\d{2}),(?P<ms>\d{3})")
 
 # LLM client loader
-def get_client() -> OpenAI:
+def get_client() -> tuple[OpenAI, str]:
+    """Return an ``OpenAI`` client and the default model name."""
     cfg_path = Path(__file__).with_name("settings.json")
     cfg = json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
     llm = cfg.get("llm", {})
@@ -28,7 +29,9 @@ def get_client() -> OpenAI:
     model = llm.get("model")
     if not key:
         raise RuntimeError("Please configure llm.api_key in settings.json")
-    return OpenAI(api_key=key, base_url=base, model=model)
+
+    client = OpenAI(api_key=key, base_url=base)
+    return client, model
 
 # Helpers to parse SRT timestamps
 
@@ -66,7 +69,7 @@ def call_llm_cleanup(
     tl_sample: List[sync.SubtitleCue],
     sl_sample: List[sync.SubtitleCue]
 ) -> (List[sync.SubtitleCue], List[sync.SubtitleCue]):
-    client = get_client()
+    client, model = get_client()
     # build SRT-like blocks
     def block(cues, tag):
         lines = [f"{tag}"]
@@ -137,7 +140,7 @@ def call_llm_select_target(
     sl_text: str,
     tl_block: List[sync.SubtitleCue]
 ) -> str:
-    client = get_client()
+    client, model = get_client()
     block_text = '\n'.join(c.text for c in tl_block)
     prompt = (
         f"Source utterance: {sl_text}\n\n"
