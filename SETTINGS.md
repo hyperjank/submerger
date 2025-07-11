@@ -9,7 +9,7 @@ This file documents configuration options stored in `settings.json`.
   "llm": {
     "api_key": "<your token>",
     "api_base": "http://localhost:1234/v1",
-    "model": "deepseek-chat"
+    "model": "qwen3-8b"
   }
 }
 ```
