@@ -26,14 +26,12 @@ def get_client() -> tuple[OpenAI, str]:
     cfg_path = Path(__file__).with_name("settings.json")
     cfg = json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
     llm = cfg.get("llm", {})
-    key = llm.get("api_key") or os.getenv("OPENAI_API_KEY")
-    base = llm.get("api_base") or os.getenv(
-        "OPENAI_API_BASE", "http://localhost:1234/v1"
-    )
-    model = llm.get("model") or os.getenv("OPENAI_MODEL", "qwen3-8b")
+    key = llm.get("api_key")
+    base = llm.get("api_base")
+    model = llm.get("model")
     if not key:
-        raise RuntimeError(
-            "Please configure llm.api_key in settings.json or set OPENAI_API_KEY"
+        print(
+            "Please configure llm.api_key in settings.json"
         )
 
     client = OpenAI(api_key=key, base_url=base)
