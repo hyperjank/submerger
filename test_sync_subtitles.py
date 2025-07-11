@@ -1,4 +1,11 @@
 import importlib
+import pytest
+import llm_align
+
+
+@pytest.fixture(autouse=True)
+def _stub_client(monkeypatch):
+    monkeypatch.setattr(llm_align, "get_client", lambda: None)
 
 # ensure module imports without side effects like loading test files
 
