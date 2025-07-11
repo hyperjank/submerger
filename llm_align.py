@@ -167,7 +167,7 @@ def sample_segments(cues: List[Dict], window_ms: int = 10000) -> List[Dict]:
     return selected
 
 
-def call_llm_for_cleanup(tl_sample: List[Dict], sl_sample: List[Dict], model: str, max_tokens: int = 200) -> str:
+def call_llm_for_cleanup(tl_sample: List[Dict], sl_sample: List[Dict], model: str, max_tokens: int = 1000) -> str:
     """Ask the LLM to remove ads and similar junk from the provided samples."""
 
     if client is None:
