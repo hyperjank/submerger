@@ -421,7 +421,12 @@ def semantic_align_cues(
 # ──────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    from sync_subtitles import make_cued, dedupe_cues, write_synced_subs
+    from sync_subtitles import (
+        make_cued,
+        dedupe_cues,
+        pair_subtitles,
+        write_synced_subs,
+    )
     import argparse
 
     parser = argparse.ArgumentParser(description="Align two subtitle files via an LLM")
@@ -463,7 +468,13 @@ if __name__ == "__main__":
         except Exception as exc:
             print(f"LLM cleanup failed: {exc}")
 
-    aligned = semantic_align_cues(tl_cues, sl_cues, model=model)
+    # First merge both tracks into a unified timeline so gaps on either side are
+    # preserved for the alignment step.
+    collapsed = pair_subtitles(tl_cues, sl_cues)
+
+    # Run the semantic/heuristic alignment over the paired timeline.
+    aligned = align_with_llm(collapsed, model=model)
+    aligned = adjust_aligned_timings(aligned)
 
     write_synced_subs(aligned, args.out, args.tl_code, args.sl_code)
 
