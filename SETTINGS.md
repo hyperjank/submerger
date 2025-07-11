@@ -1,6 +1,6 @@
 # Project Settings
 
-This file documents configuration options stored in `settings.json`.
+This file documents configuration options stored in `submerger/settings.json`.
 
 ## LLM settings
 

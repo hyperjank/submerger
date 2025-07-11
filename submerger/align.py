@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 from typing import List, Dict
-from sync_subtitles import SubtitleCue
+from .sync import SubtitleCue
 from difflib import SequenceMatcher
 from openai import OpenAI
 
@@ -602,39 +602,29 @@ def semantic_align_cues(
 # 5) Main routine
 # ──────────────────────────────────────────────────────────────────────────────
 
-if __name__ == "__main__":
-    from sync_subtitles import (
-        make_cued,
-        dedupe_cues,
-        write_synced_subs,
-    )
-    import argparse
+def main(
+    tl_file: str,
+    sl_file: str,
+    *,
+    tl_code: str = "tl",
+    sl_code: str = "sl",
+    out: str = "final_synced",
+    deepseek: bool = False,
+) -> None:
+    """Command-line entry point for LLM-assisted alignment."""
 
-    parser = argparse.ArgumentParser(description="Align two subtitle files via an LLM")
-    parser.add_argument("tl_file", help="Target language subtitle file")
-    parser.add_argument("sl_file", help="Source language subtitle file")
-    parser.add_argument("--tl-code", default="tl", help="language code for the target language")
-    parser.add_argument("--sl-code", default="sl", help="language code for the source language")
-    parser.add_argument("--out", default="final_synced", help="base path for output files")
-    parser.add_argument(
-        "--deepseek",
-        action="store_true",
-        help="Use the DeepSeek API instead of the local LLM endpoint",
-    )
-
-    args = parser.parse_args()
+    from .sync import make_cued, dedupe_cues, write_synced_subs
 
     client = get_client()
 
-    if args.deepseek:
-        # override globals to use the DeepSeek service
+    if deepseek:
         api_key = os.getenv("DEEPSEEK_API_KEY")
         endpoint = "https://api.deepseek.com/v1"
-        model = load_config().get("llm", {}).get("model", "deepseek-chat")
+        globals()["model"] = load_config().get("llm", {}).get("model", "deepseek-chat")
         client = OpenAI(api_key=api_key, base_url=endpoint) if api_key else None
 
-    tl_cues = dedupe_cues(make_cued(args.tl_file))
-    sl_cues = dedupe_cues(regex_cleanup(make_cued(args.sl_file)))
+    tl_cues = dedupe_cues(make_cued(tl_file))
+    sl_cues = dedupe_cues(regex_cleanup(make_cued(sl_file)))
 
     print(f"Loaded {len(tl_cues)} TL cues and {len(sl_cues)} SL cues after cleanup")
 
@@ -653,16 +643,42 @@ if __name__ == "__main__":
         except Exception as exc:
             print(f"LLM cleanup failed: {exc}")
 
-    # Align at the sentence level using fuzzy matching and the LLM.
     aligned = sentence_level_align(
         tl_cues,
         sl_cues,
-        tl_code=args.tl_code,
-        sl_code=args.sl_code,
+        tl_code=tl_code,
+        sl_code=sl_code,
         model=model,
     )
     aligned = adjust_aligned_timings(aligned)
 
-    write_synced_subs(aligned, args.out, args.tl_code, args.sl_code)
+    write_synced_subs(aligned, out, tl_code, sl_code)
 
-    print(f"Done!  {args.out}_{args.tl_code}.srt + {args.out}_{args.sl_code}.srt generated.")
+    print(f"Done!  {out}_{tl_code}.srt + {out}_{sl_code}.srt generated.")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Align two subtitle files via an LLM")
+    parser.add_argument("tl_file", help="Target language subtitle file")
+    parser.add_argument("sl_file", help="Source language subtitle file")
+    parser.add_argument("--tl-code", default="tl", help="language code for the target language")
+    parser.add_argument("--sl-code", default="sl", help="language code for the source language")
+    parser.add_argument("--out", default="final_synced", help="base path for output files")
+    parser.add_argument(
+        "--deepseek",
+        action="store_true",
+        help="Use the DeepSeek API instead of the local LLM endpoint",
+    )
+
+    args = parser.parse_args()
+
+    main(
+        args.tl_file,
+        args.sl_file,
+        tl_code=args.tl_code,
+        sl_code=args.sl_code,
+        out=args.out,
+        deepseek=args.deepseek,
+    )
