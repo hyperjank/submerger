@@ -2,27 +2,40 @@
 import os
 import json
 import re
+from pathlib import Path
 from typing import List, Dict
-from dotenv import load_dotenv
 from difflib import SequenceMatcher
 from openai import OpenAI
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Load your API key from .env
-# ──────────────────────────────────────────────────────────────────────────────
-load_dotenv()  # look for a .env file in cwd or above
+# Global model and client references populated by `get_client`.
+model = "deepseek-chat"
+client = None
+_config = None
 
-# Environment variables allow overriding the default LLM credentials and
-# endpoint. By default we assume a local API (``LLM_API_BASE``) with
-# ``LLM_API_KEY``. The historical ``DEEPSEEK_API_KEY`` points to the public
-# DeepSeek service and can be enabled via ``--deepseek`` on the CLI.
-api_key = os.getenv("LLM_API_KEY")
-endpoint = os.getenv("LLM_API_BASE", "http://localhost:1234/v1")
-model = os.getenv("LLM_MODEL", "deepseek-chat")
 
-# Instantiate the client only when a key is provided so library imports do not
-# fail in environments without credentials (e.g. during testing).
-client = OpenAI(api_key=api_key, base_url=endpoint) if api_key else None
+def load_config() -> dict:
+    """Load settings.json from this directory."""
+    global _config
+    if _config is None:
+        path = Path(__file__).with_name("settings.json")
+        if path.exists():
+            with path.open() as f:
+                _config = json.load(f)
+        else:
+            _config = {}
+    return _config
+
+
+def get_client() -> OpenAI | None:
+    """Load LLM config and return a cached OpenAI client."""
+    global client, model
+    if client is None:
+        cfg = load_config().get("llm", {})
+        api_key = cfg.get("api_key")
+        endpoint = cfg.get("api_base", "http://localhost:1234/v1")
+        model = cfg.get("model", "deepseek-chat")
+        client = OpenAI(api_key=api_key, base_url=endpoint) if api_key else None
+    return client
 
 
 def sanitize_json(text: str) -> str:
@@ -159,6 +172,7 @@ def combine_into_sentences(cues: List[Dict], gap_ms: int = 500) -> List[Dict]:
 def call_llm_for_alignment(tl_text: str, sl_text: str, model: str, max_tokens: int = 5) -> bool:
     """Ask the LLM if the source line is a translation of the target line."""
 
+    client = get_client()
     if client is None:
         raise RuntimeError(
             "LLM client not configured; set LLM_API_KEY or DEEPSEEK_API_KEY"
@@ -209,6 +223,7 @@ def call_llm_for_translation(
 ) -> str:
     """Ask the LLM to translate ``sl_text`` or select the matching TL line."""
 
+    client = get_client()
     if client is None:
         raise RuntimeError(
             "LLM client not configured; set LLM_API_KEY or DEEPSEEK_API_KEY"
@@ -264,6 +279,7 @@ def sample_segments(cues: List[Dict], window_ms: int = 10000) -> List[Dict]:
 def call_llm_for_cleanup(tl_sample: List[Dict], sl_sample: List[Dict], model: str, max_tokens: int = 1000) -> str:
     """Ask the LLM to remove ads and similar junk from the provided samples."""
 
+    client = get_client()
     if client is None:
         raise RuntimeError(
             "LLM client not configured; set LLM_API_KEY or DEEPSEEK_API_KEY"
@@ -465,6 +481,8 @@ def sentence_level_align(
 ) -> List[Dict]:
     """Align subtitle cues at the sentence level using fuzzy matching."""
 
+    client = get_client()
+
     tl_sent = combine_into_sentences(tl_cues)
     sl_sent = combine_into_sentences(sl_cues)
     print(
@@ -618,11 +636,13 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    client = get_client()
+
     if args.deepseek:
         # override globals to use the DeepSeek service
         api_key = os.getenv("DEEPSEEK_API_KEY")
         endpoint = "https://api.deepseek.com/v1"
-        model = os.getenv("LLM_MODEL", "deepseek-chat")
+        model = load_config().get("llm", {}).get("model", "deepseek-chat")
         client = OpenAI(api_key=api_key, base_url=endpoint) if api_key else None
 
     tl_cues = dedupe_cues(make_cued(args.tl_file))

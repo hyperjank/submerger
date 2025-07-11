@@ -39,13 +39,14 @@ specific position.
 
 ### Configuration
 
-The alignment scripts look for the following environment variables which can be
-set in a ``.env`` file or your shell environment:
+Project settings live in ``settings.json`` in the repository root. The ``llm``
+section controls the language model credentials:
 
-* ``LLM_API_KEY`` – API token for the language model service.
-* ``LLM_API_BASE`` – Base URL of the API (e.g. ``http://localhost:8000/v1`` for
-  a local model).  Defaults to the local endpoint.
-* ``LLM_MODEL`` – Model name to use (defaults to ``deepseek-chat``).
+* ``api_key`` – API token for the language model service.
+* ``api_base`` – Base URL of the API (defaults to ``http://localhost:1234/v1``).
+* ``model`` – Model name to use (defaults to ``deepseek-chat``).
+
+See [SETTINGS.md](SETTINGS.md) for additional settings.
 
 You can then run ``sync_subtitles.py`` or ``llm_align.py`` with your two subtitle
 files regardless of language. Both scripts provide command line options for the
