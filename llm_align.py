@@ -158,7 +158,7 @@ def call_llm_for_alignment(tl_text: str, sl_text: str, model: str, max_tokens: i
         "role": "system",
         "content": (
             "You decide whether two lines are translations of each other. "
-            "Respond only with 'Yes' or 'No'."
+            "Respond only with Yes or No."
         ),
     }
     user = {
@@ -188,7 +188,7 @@ def call_llm_for_alignment(tl_text: str, sl_text: str, model: str, max_tokens: i
     return False
 
 
-def call_llm_for_translation(sl_text: str, sl_code: str, tl_code: str, model: str, max_tokens: int = 200) -> str:
+def call_llm_for_translation(sl_text: str, sl_code: str, tl_code: str, model: str, max_tokens: int = 500) -> str:
     """Ask the LLM to translate ``sl_text`` from ``sl_code`` to ``tl_code``."""
 
     if client is None:
