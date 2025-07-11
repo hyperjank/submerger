@@ -31,16 +31,16 @@ def sanitize_json(text: str) -> str:
     """
     # If it starts with ``` then strip the first and last lines
     lines = text.strip().splitlines()
+    # Remove any lines equal to "<think>" or "</think>"
+    lines = [line for line in lines if line.strip() not in ("<think>", "</think>")]
+    # Remove leading/trailing blank lines introduced by the above filter
+    lines = "\n".join(lines).strip().splitlines()
+    # If it starts with ``` after removing think tags, drop the first line
     if lines and lines[0].startswith("```"):
-        # drop the first line (``` or ```json)
         lines = lines[1:]
+    # And drop the last fence if present
     if lines and lines[-1].startswith("```"):
-        # drop the last fence
         lines = lines[:-1]
-    # Remove any lines equal to "<think>" or "</think>" and anything between them
-    lines = [line for line in lines if not
-               (line.strip() == "<think>" or
-                line.strip() == "</think>")]
     return "\n".join(lines).strip()
 
 
