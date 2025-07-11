@@ -1,6 +1,7 @@
 import importlib
 import pytest
 import llm_align
+from sync_subtitles import SubtitleCue
 
 
 @pytest.fixture(autouse=True)
@@ -18,12 +19,12 @@ def test_pair_basic():
     from sync_subtitles import pair_subtitles
 
     tl = [
-        {'start_time': 0, 'end_time': 1000, 'text': 'A'},
-        {'start_time': 1000, 'end_time': 2000, 'text': 'B'},
+        SubtitleCue(0, 1000, 'A'),
+        SubtitleCue(1000, 2000, 'B'),
     ]
     sl = [
-        {'start_time': 0, 'end_time': 1500, 'text': 'a'},
-        {'start_time': 1500, 'end_time': 2000, 'text': 'b'},
+        SubtitleCue(0, 1500, 'a'),
+        SubtitleCue(1500, 2000, 'b'),
     ]
 
     expected = [
@@ -39,12 +40,12 @@ def test_pair_basic():
 def test_needs_llm_heuristic():
     from llm_align import needs_llm
 
-    good_tl = {'start_time': 0, 'end_time': 1000, 'text': 'Hello'}
-    good_sl = {'start_time': 0, 'end_time': 1000, 'text': 'hello'}
+    good_tl = SubtitleCue(0, 1000, 'Hello')
+    good_sl = SubtitleCue(0, 1000, 'hello')
     assert not needs_llm(good_tl, good_sl)
 
-    bad_tl = {'start_time': 0, 'end_time': 1000, 'text': '你好'}
-    bad_sl = {'start_time': 5000, 'end_time': 6000, 'text': 'world'}
+    bad_tl = SubtitleCue(0, 1000, '你好')
+    bad_sl = SubtitleCue(5000, 6000, 'world')
     assert needs_llm(bad_tl, bad_sl)
 
 def test_make_cued_skips_empty(tmp_path):
@@ -67,9 +68,7 @@ Real text
 
     cues = make_cued(str(p))
 
-    assert cues == [
-        {'start_time': 2000, 'end_time': 3000, 'text': 'Real text'}
-    ]
+    assert cues == [SubtitleCue(2000, 3000, 'Real text')]
 
 
 def test_no_empty_segments_reach_pair(tmp_path):
@@ -86,9 +85,9 @@ Hello
     p = tmp_path / "t.srt"
     p.write_text(srt)
     tl = make_cued(str(p))
-    sl = [{'start_time': 2000, 'end_time': 3000, 'text': 'hola'}]
+    sl = [SubtitleCue(2000, 3000, 'hola')]
 
-    assert all(c['text'] for c in tl)
+    assert all(c.text for c in tl)
 
     paired = pair_subtitles(tl, sl)
     assert paired == [
@@ -100,16 +99,16 @@ def test_dedupe_cues():
     from sync_subtitles import dedupe_cues
 
     cues = [
-        {'start_time': 0, 'end_time': 1000, 'text': 'hi'},
-        {'start_time': 1000, 'end_time': 2000, 'text': 'hi'},
-        {'start_time': 2000, 'end_time': 3000, 'text': 'there'},
-        {'start_time': 3000, 'end_time': 4000, 'text': 'there'},
+        SubtitleCue(0, 1000, 'hi'),
+        SubtitleCue(1000, 2000, 'hi'),
+        SubtitleCue(2000, 3000, 'there'),
+        SubtitleCue(3000, 4000, 'there'),
     ]
 
     deduped = dedupe_cues(cues)
     assert deduped == [
-        {'start_time': 0, 'end_time': 2000, 'text': 'hi'},
-        {'start_time': 2000, 'end_time': 4000, 'text': 'there'},
+        SubtitleCue(0, 2000, 'hi'),
+        SubtitleCue(2000, 4000, 'there'),
     ]
 
 
@@ -155,8 +154,8 @@ def test_adjust_aligned_timings_merges_nearby():
     from sync_subtitles import pair_subtitles
     from llm_align import align_with_llm, adjust_aligned_timings
 
-    tl = [{'start_time': 0, 'end_time': 1000, 'text': 'hi'}]
-    sl = [{'start_time': 50, 'end_time': 800, 'text': 'hola'}]
+    tl = [SubtitleCue(0, 1000, 'hi')]
+    sl = [SubtitleCue(50, 800, 'hola')]
 
     collapsed = pair_subtitles(tl, sl)
     aligned = align_with_llm(collapsed, time_tolerance=200)
@@ -171,27 +170,23 @@ def test_regex_cleanup_removes_urls():
     from llm_align import regex_cleanup
 
     cues = [
-        {'start_time': 0, 'end_time': 1000, 'text': 'visit http://example.com'},
-        {'start_time': 35000, 'end_time': 36000, 'text': 'end'},
+        SubtitleCue(0, 1000, 'visit http://example.com'),
+        SubtitleCue(35000, 36000, 'end'),
     ]
 
     cleaned = regex_cleanup(cues, window_ms=30000)
 
     assert cleaned == [
-        {'start_time': 0, 'end_time': 1000, 'text': 'visit'},
-        {'start_time': 35000, 'end_time': 36000, 'text': 'end'},
+        SubtitleCue(0, 1000, 'visit'),
+        SubtitleCue(35000, 36000, 'end'),
     ]
 
 
 def test_semantic_align_cues_basic():
     from llm_align import semantic_align_cues
 
-    tl = [
-        {'start_time': 0, 'end_time': 1000, 'text': 'hello'},
-    ]
-    sl = [
-        {'start_time': 50, 'end_time': 900, 'text': 'hello'},
-    ]
+    tl = [SubtitleCue(0, 1000, 'hello')]
+    sl = [SubtitleCue(50, 900, 'hello')]
 
     aligned = semantic_align_cues(tl, sl, window_ms=200)
     assert aligned == [

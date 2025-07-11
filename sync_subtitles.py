@@ -1,43 +1,57 @@
 #!/usr/bin/env python3
 
 import pysubs2
+from dataclasses import dataclass, asdict
 from typing import List, Dict
 
 
-def make_cued(source_subtitle):
+@dataclass
+class SubtitleCue:
+    start_time: int
+    end_time: int
+    text: str
+
+    def to_dict(self) -> Dict:
+        """Return a plain dictionary representation."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> "SubtitleCue":
+        return cls(**data)
+
+
+def make_cued(source_subtitle: str) -> List[SubtitleCue]:
     subs = pysubs2.load(source_subtitle)
-    cues = []
+    cues: List[SubtitleCue] = []
     for ev in subs.events:
         # skip cues with no visible text after stripping markup
         if not ev.plaintext.strip():
             continue
-        cues.append({
-            'start_time': ev.start,
-            'end_time': ev.end,
-            'text': ev.plaintext.strip(),
-        })
-    return sorted(cues, key=lambda c: c['start_time'])
+        cues.append(
+            SubtitleCue(start_time=ev.start, end_time=ev.end, text=ev.plaintext.strip())
+        )
+    return sorted(cues, key=lambda c: c.start_time)
 
 
-def dedupe_cues(cues: List[Dict]) -> List[Dict]:
+def dedupe_cues(cues: List[SubtitleCue]) -> List[SubtitleCue]:
     """Return a new list with consecutive duplicate texts merged."""
 
-    deduped: List[Dict] = []
+    deduped: List[SubtitleCue] = []
     for cue in cues:
-        if deduped and cue['text'] == deduped[-1]['text']:
+        if deduped and cue.text == deduped[-1].text:
             # extend the previous cue window instead of keeping both
-            deduped[-1] = {
-                'start_time': deduped[-1]['start_time'],
-                'end_time': cue['end_time'],
-                'text': cue['text'],
-            }
+            deduped[-1] = SubtitleCue(
+                start_time=deduped[-1].start_time,
+                end_time=cue.end_time,
+                text=cue.text,
+            )
         else:
-            deduped.append(cue.copy())
+            deduped.append(SubtitleCue(cue.start_time, cue.end_time, cue.text))
 
     return deduped
 
 
-def pair_subtitles(tl_cued, sl_cued):
+def pair_subtitles(tl_cued: List[SubtitleCue], sl_cued: List[SubtitleCue]):
 
     """Return a merged timeline of TL/SL cues.
 
@@ -53,8 +67,8 @@ def pair_subtitles(tl_cued, sl_cued):
     print(f"Pairing subtitles: {len(tl_cued)} TL cues, {len(sl_cued)} SL cues")
 
     # Collect all boundaries that define the timeline
-    times = {t for cue in tl_cued for t in (cue["start_time"], cue["end_time"])}
-    times.update(t for cue in sl_cued for t in (cue["start_time"], cue["end_time"]))
+    times = {t for cue in tl_cued for t in (cue.start_time, cue.end_time)}
+    times.update(t for cue in sl_cued for t in (cue.start_time, cue.end_time))
 
     timeline = sorted(times)
 
@@ -67,20 +81,20 @@ def pair_subtitles(tl_cued, sl_cued):
 
     for t0, t1 in zip(timeline, timeline[1:]):
         # Advance TL index until the cue covering ``t0`` is found
-        while tl_cue and tl_cue["end_time"] <= t0:
+        while tl_cue and tl_cue.end_time <= t0:
             i += 1
             tl_cue = tl_cued[i] if i < len(tl_cued) else None
-        if tl_cue and tl_cue["start_time"] <= t0 < tl_cue["end_time"]:
-            tl_text = tl_cue["text"]
+        if tl_cue and tl_cue.start_time <= t0 < tl_cue.end_time:
+            tl_text = tl_cue.text
         else:
             tl_text = ""
 
         # Advance SL index until the cue covering ``t0`` is found
-        while sl_cue and sl_cue["end_time"] <= t0:
+        while sl_cue and sl_cue.end_time <= t0:
             j += 1
             sl_cue = sl_cued[j] if j < len(sl_cued) else None
-        if sl_cue and sl_cue["start_time"] <= t0 < sl_cue["end_time"]:
-            sl_text = sl_cue["text"]
+        if sl_cue and sl_cue.start_time <= t0 < sl_cue.end_time:
+            sl_text = sl_cue.text
         else:
             sl_text = ""
 
