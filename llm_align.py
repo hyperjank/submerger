@@ -102,6 +102,45 @@ def needs_llm(tl_seg: Dict, sl_seg: Dict, *, time_tol: int = 700, sim_thr: float
     # Fallback: compare romanized text similarity
     return local_similarity(tl_seg['text'], sl_seg['text']) < sim_thr
 
+# ------------------------------------------------------------------------------
+# Sentence helpers
+# ------------------------------------------------------------------------------
+
+SENT_END_RE = re.compile(r"[.!?。！？…]+['\"]?$")
+
+
+def combine_into_sentences(cues: List[Dict], gap_ms: int = 500) -> List[Dict]:
+    """Merge cues until they form complete sentences/utterances."""
+
+    if not cues:
+        return []
+
+    merged: List[Dict] = []
+    buf: List[str] = []
+    start = cues[0]["start_time"]
+    end = cues[0]["end_time"]
+
+    for cue in cues:
+        if not buf:
+            start = cue["start_time"]
+        elif cue["start_time"] - end > gap_ms:
+            merged.append({"start_time": start, "end_time": end, "text": " ".join(buf)})
+            buf = []
+            start = cue["start_time"]
+
+        buf.append(cue["text"])
+        end = cue["end_time"]
+
+        if SENT_END_RE.search(cue["text"].strip()):
+            merged.append({"start_time": start, "end_time": end, "text": " ".join(buf)})
+            buf = []
+
+    if buf:
+        merged.append({"start_time": start, "end_time": end, "text": " ".join(buf)})
+
+    print(f"combine_into_sentences: {len(cues)} cues -> {len(merged)} sentences")
+    return merged
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 2) Call your local LLM endpoint for alignment
@@ -147,6 +186,35 @@ def call_llm_for_alignment(tl_text: str, sl_text: str, model: str, max_tokens: i
             print(f"Unrecognized LLM response: {answer!r} - giving up")
             break
     return False
+
+
+def call_llm_for_translation(sl_text: str, sl_code: str, tl_code: str, model: str, max_tokens: int = 200) -> str:
+    """Ask the LLM to translate ``sl_text`` from ``sl_code`` to ``tl_code``."""
+
+    if client is None:
+        raise RuntimeError(
+            "LLM client not configured; set LLM_API_KEY or DEEPSEEK_API_KEY"
+        )
+
+    system = {
+        "role": "system",
+        "content": (
+            f"You translate from {sl_code} to {tl_code}. Respond only with the translation."
+        ),
+    }
+    user = {"role": "user", "content": sl_text}
+
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[system, user],
+        stream=False,
+        max_tokens=max_tokens,
+    )
+
+    if resp and resp.choices and resp.choices[0].message:
+        return resp.choices[0].message.content.strip()
+
+    return ""
 
 
 def sample_segments(cues: List[Dict], window_ms: int = 10000) -> List[Dict]:
@@ -356,6 +424,103 @@ def adjust_aligned_timings(collapsed: List[Dict], time_tolerance: int = 700) -> 
     return final
 
 
+def sentence_level_align(
+    tl_cues: List[Dict],
+    sl_cues: List[Dict],
+    *,
+    tl_code: str = "tl",
+    sl_code: str = "sl",
+    model: str = model,
+    context: int = 2,
+    sim_threshold: float = 0.6,
+) -> List[Dict]:
+    """Align subtitle cues at the sentence level using fuzzy matching."""
+
+    tl_sent = combine_into_sentences(tl_cues)
+    sl_sent = combine_into_sentences(sl_cues)
+    print(
+        f"\nSentence alignment on {len(tl_sent)} TL sentences and {len(sl_sent)} SL sentences"
+    )
+
+    aligned: List[Dict] = []
+    j = 0
+
+    for idx, sl in enumerate(sl_sent):
+        print(f"\nSL[{idx}] '{sl['text']}'")
+        match = None
+        best_end = None
+        cand_text = ""
+
+        for start in range(j, min(len(tl_sent), j + context + 1)):
+            accum = ""
+            for end in range(start, min(len(tl_sent), start + context + 1)):
+                accum = (accum + " " + tl_sent[end]["text"]).strip()
+                if local_similarity(accum, sl["text"]) >= sim_threshold:
+                    match = start
+                    best_end = end
+                    cand_text = accum
+                    break
+                if client and needs_llm(
+                    {"start_time": 0, "end_time": 0, "text": accum},
+                    {"start_time": 0, "end_time": 0, "text": sl["text"]},
+                    time_tol=999999,
+                    sim_thr=sim_threshold,
+                ):
+                    try:
+                        if call_llm_for_alignment(accum, sl["text"], model=model):
+                            match = start
+                            best_end = end
+                            cand_text = accum
+                            break
+                    except Exception as exc:
+                        print(f"  LLM alignment failed: {exc}")
+            if match is not None:
+                break
+
+        if match is not None and best_end is not None:
+            print(f"  Matched TL[{match}:{best_end}] -> '{cand_text}'")
+            aligned.append(
+                {
+                    "start_time": tl_sent[match]["start_time"],
+                    "end_time": tl_sent[best_end]["end_time"],
+                    "tl_text": cand_text,
+                    "sl_text": sl["text"],
+                }
+            )
+            j = best_end + 1
+        else:
+            print("  No TL match found -> translating")
+            translation = ""
+            if client:
+                try:
+                    translation = call_llm_for_translation(
+                        sl["text"], sl_code, tl_code, model=model
+                    )
+                except Exception as exc:
+                    print(f"  Translation failed: {exc}")
+            aligned.append(
+                {
+                    "start_time": sl["start_time"],
+                    "end_time": sl["end_time"],
+                    "tl_text": translation,
+                    "sl_text": sl["text"],
+                }
+            )
+
+    for remaining in tl_sent[j:]:
+        aligned.append(
+            {
+                "start_time": remaining["start_time"],
+                "end_time": remaining["end_time"],
+                "tl_text": remaining["text"],
+                "sl_text": "",
+            }
+        )
+
+    aligned.sort(key=lambda s: s["start_time"])
+    return aligned
+
+
 def semantic_align_cues(
     tl_cues: List[Dict],
     sl_cues: List[Dict],
@@ -364,68 +529,18 @@ def semantic_align_cues(
     window_ms: int = 2000,
     sim_threshold: float = 0.6,
 ) -> List[Dict]:
-    """Return segments where matching TL/SL lines share the TL timestamps."""
+    """Return sentence-aligned segments with matching TL timestamps."""
 
-    aligned: List[Dict] = []
-    used_sl = set()
-    sl_index = 0
+    aligned = sentence_level_align(
+        tl_cues,
+        sl_cues,
+        tl_code="tl",
+        sl_code="sl",
+        model=model,
+        context=2,
+        sim_threshold=sim_threshold,
+    )
 
-    for tl in tl_cues:
-        match_idx = None
-        j = sl_index
-        while j < len(sl_cues) and sl_cues[j]["start_time"] <= tl["start_time"] + window_ms:
-            sl = sl_cues[j]
-            if j in used_sl:
-                j += 1
-                continue
-            if abs(sl["start_time"] - tl["start_time"]) <= window_ms:
-                if local_similarity(tl["text"], sl["text"]) >= sim_threshold:
-                    match_idx = j
-                    break
-                if client and needs_llm(
-                    {"start_time": tl["start_time"], "end_time": tl["end_time"], "text": tl["text"]},
-                    {"start_time": sl["start_time"], "end_time": sl["end_time"], "text": sl["text"]},
-                    time_tol=window_ms,
-                    sim_thr=sim_threshold,
-                ):
-                    try:
-                        if call_llm_for_alignment(tl["text"], sl["text"], model=model):
-                            match_idx = j
-                            break
-                    except Exception:
-                        pass
-            if sl["start_time"] > tl["start_time"] + window_ms:
-                break
-            j += 1
-
-        if match_idx is not None:
-            sl = sl_cues[match_idx]
-            used_sl.add(match_idx)
-            sl_index = match_idx + 1
-            aligned.append({
-                "start_time": tl["start_time"],
-                "end_time": tl["end_time"],
-                "tl_text": tl["text"],
-                "sl_text": sl["text"],
-            })
-        else:
-            aligned.append({
-                "start_time": tl["start_time"],
-                "end_time": tl["end_time"],
-                "tl_text": tl["text"],
-                "sl_text": "",
-            })
-
-    for idx, sl in enumerate(sl_cues):
-        if idx not in used_sl:
-            aligned.append({
-                "start_time": sl["start_time"],
-                "end_time": sl["end_time"],
-                "tl_text": "",
-                "sl_text": sl["text"],
-            })
-
-    aligned.sort(key=lambda s: s["start_time"])
     return adjust_aligned_timings(aligned, time_tolerance=window_ms)
 
 
@@ -437,7 +552,6 @@ if __name__ == "__main__":
     from sync_subtitles import (
         make_cued,
         dedupe_cues,
-        pair_subtitles,
         write_synced_subs,
     )
     import argparse
@@ -483,13 +597,14 @@ if __name__ == "__main__":
         except Exception as exc:
             print(f"LLM cleanup failed: {exc}")
 
-    # First merge both tracks into a unified timeline so gaps on either side are
-    # preserved for the alignment step.
-    collapsed = pair_subtitles(tl_cues, sl_cues)
-    print(f"Collapsing produced {len(collapsed)} initial segments")
-
-    # Run the semantic/heuristic alignment over the paired timeline.
-    aligned = align_with_llm(collapsed, model=model)
+    # Align at the sentence level using fuzzy matching and the LLM.
+    aligned = sentence_level_align(
+        tl_cues,
+        sl_cues,
+        tl_code=args.tl_code,
+        sl_code=args.sl_code,
+        model=model,
+    )
     aligned = adjust_aligned_timings(aligned)
 
     write_synced_subs(aligned, args.out, args.tl_code, args.sl_code)
