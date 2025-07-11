@@ -44,6 +44,16 @@ def sanitize_json(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def strip_think(text: str) -> str:
+    """Remove any <think>...</think> blocks and stray tags."""
+    text = THINK_BLOCK_RE.sub("", text)
+    text = text.replace("<think>", "").replace("</think>", "")
+    return text.strip()
+
+
 JUNK_RE = re.compile(
     r"(https?://\S+|www\.\S+|presented by|translator)", re.IGNORECASE
 )
@@ -188,21 +198,40 @@ def call_llm_for_alignment(tl_text: str, sl_text: str, model: str, max_tokens: i
     return False
 
 
-def call_llm_for_translation(sl_text: str, sl_code: str, tl_code: str, model: str, max_tokens: int = 500) -> str:
-    """Ask the LLM to translate ``sl_text`` from ``sl_code`` to ``tl_code``."""
+def call_llm_for_translation(
+    sl_text: str,
+    sl_code: str,
+    tl_code: str,
+    model: str,
+    *,
+    tl_block: str | None = None,
+    max_tokens: int = 500,
+) -> str:
+    """Ask the LLM to translate ``sl_text`` or select the matching TL line."""
 
     if client is None:
         raise RuntimeError(
             "LLM client not configured; set LLM_API_KEY or DEEPSEEK_API_KEY"
         )
 
+    if tl_block:
+        instruction = (
+            f"You translate from {sl_code} to {tl_code}. If possible, "
+            "pick and return only the line from the provided target text that matches the source. "
+            "Otherwise give your own translation."
+        )
+        user_content = f"Source: {sl_text}\n\nTarget options:\n{tl_block}"
+    else:
+        instruction = (
+            f"You translate from {sl_code} to {tl_code}. Respond only with the translation."
+        )
+        user_content = sl_text
+
     system = {
         "role": "system",
-        "content": (
-            f"You translate from {sl_code} to {tl_code}. Respond only with the translation."
-        ),
+        "content": instruction,
     }
-    user = {"role": "user", "content": sl_text}
+    user = {"role": "user", "content": user_content}
 
     resp = client.chat.completions.create(
         model=model,
@@ -212,7 +241,7 @@ def call_llm_for_translation(sl_text: str, sl_code: str, tl_code: str, model: st
     )
 
     if resp and resp.choices and resp.choices[0].message:
-        return resp.choices[0].message.content.strip()
+        return strip_think(resp.choices[0].message.content.strip())
 
     return ""
 
@@ -499,8 +528,20 @@ def sentence_level_align(
             translation = ""
             if client:
                 try:
+                    window = 3000
+                    context_lines = [
+                        t["text"]
+                        for t in tl_sent
+                        if t["start_time"] < sl["end_time"] + window
+                        and t["end_time"] > sl["start_time"] - window
+                    ]
+                    tl_block = "\n".join(context_lines)
                     translation = call_llm_for_translation(
-                        sl["text"], sl_code, tl_code, model=model
+                        sl["text"],
+                        sl_code,
+                        tl_code,
+                        model=model,
+                        tl_block=tl_block,
                     )
                 except Exception as exc:
                     print(f"  Translation failed: {exc}")
