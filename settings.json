@@ -2,7 +2,7 @@
   "llm": {
     "api_key": "",
     "api_base": "http://localhost:1234/v1",
-    "model": "deepseek-chat"
+    "model": "qwen3-8b"
   },
   "player": {},
   "dictionary": {},
