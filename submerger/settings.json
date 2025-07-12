@@ -1,8 +1,8 @@
 {
   "llm": {
-    "api_key": "",
-    "api_base": "http://localhost:1234/v1",
-    "model": "qwen3-8b"
+    "api_key": "1234",
+    "api_base": "http://127.0.0.1:1234/v1",
+    "model": "qwen3-1.7b"
   },
   "player": {},
   "dictionary": {},
