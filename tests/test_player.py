@@ -4,6 +4,7 @@ from pathlib import Path
 
 try:
     from PySide6.QtWidgets import QApplication
+    from submerger.interaction import SubtitleInteraction
     from submerger.playback import PlaybackSessionStore
     from submerger.player import MainWindow
     from submerger.subtitles import SubtitleCue, SubtitleTrack
@@ -115,6 +116,21 @@ class PlayerTests(unittest.TestCase):
             self.assertEqual(session.speed, 1.25)
             self.assertEqual(session.primary_offset, 0.4)
             self.assertEqual(session.secondary_offset, -0.2)
+            window.close()
+
+    def test_hover_deduplication_includes_subtitle_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            window, _player = self.make_window(Path(tmp))
+            first = SubtitleInteraction("hover", "run", "primary", 5.0, "快跑")
+            later = SubtitleInteraction("hover", "run", "primary", 12.0, "运行")
+
+            window.handle_subtitle_interaction(first)
+            window.handle_subtitle_interaction(first)
+            self.assertEqual(window._hover_generation, 1)
+
+            window.handle_subtitle_interaction(later)
+            self.assertEqual(window._hover_generation, 2)
+            window.hover_timer.stop()
             window.close()
 
 

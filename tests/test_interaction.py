@@ -1,7 +1,6 @@
 import unittest
 
 from submerger.interaction import (
-    DictionaryPlugin,
     LMStudioExplanationClient,
     SubtitleInteraction,
     clean_llm_explanation,
@@ -21,19 +20,6 @@ class InteractionTests(unittest.TestCase):
 
     def test_normalize_lookup_text_strips_punctuation(self) -> None:
         self.assertEqual(normalize_lookup_text('"Hockey!"'), "hockey")
-
-    def test_dictionary_plugin_includes_paired_subtitle(self) -> None:
-        result = DictionaryPlugin().lookup(
-            SubtitleInteraction(
-                kind="click",
-                text="hockey",
-                language="primary",
-                paired_text="冰球",
-            )
-        )
-
-        self.assertIn("team sport", result.body)
-        self.assertIn("冰球", result.body)
 
     def test_explanation_prompt_includes_context(self) -> None:
         prompt = explanation_user_prompt(

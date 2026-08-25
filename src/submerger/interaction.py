@@ -56,36 +56,6 @@ def normalize_lookup_text(text: str) -> str:
     return text.strip().lower().strip(".,!?;:\"'()[]{}“”‘’")
 
 
-class DictionaryPlugin:
-    def __init__(self) -> None:
-        self.entries = {
-            "hockey": "A team sport played on ice with sticks and a puck.",
-            "flyer": "A member of the Philadelphia Flyers hockey team in this context.",
-            "coming": "Present participle of come; often part of a phrasal verb or future construction.",
-            "back": "Return to a previous place, topic, or state.",
-        }
-
-    def lookup(self, interaction: SubtitleInteraction) -> PluginResult:
-        key = normalize_lookup_text(interaction.text)
-        body = self.entries.get(key)
-        if body is None:
-            body = f"No local dictionary entry yet for '{interaction.text}'."
-        if interaction.paired_text:
-            body += f"\n\nPaired subtitle:\n{interaction.paired_text}"
-        return PluginResult(title=f"Dictionary: {interaction.text}", body=body, source="local-dictionary")
-
-
-class ExplanationPlugin:
-    def explain(self, interaction: SubtitleInteraction) -> PluginResult:
-        body = (
-            "LLM explanation provider is not connected yet.\n\n"
-            f"Selected phrase:\n{interaction.text}"
-        )
-        if interaction.paired_text:
-            body += f"\n\nPaired subtitle:\n{interaction.paired_text}"
-        return PluginResult(title="Phrase Explanation", body=body, source="llm-placeholder")
-
-
 class LMStudioExplanationClient:
     def __init__(
         self,
@@ -205,22 +175,3 @@ def explanation_response_format() -> dict:
             },
         },
     }
-
-
-class SubtitlePluginBus:
-    def __init__(self) -> None:
-        from .plugins import create_default_registry
-
-        self.registry = create_default_registry()
-        self.dictionary = DictionaryPlugin()
-        self.explainer = ExplanationPlugin()
-
-    def handle(self, interaction: SubtitleInteraction) -> PluginResult:
-        from .plugins.base import PluginContext
-
-        actions = self.registry.actions_for_event(interaction.kind)
-        if not actions:
-            return PluginResult("Subtitle Event", interaction.text, "plugin-bus")
-        context = PluginContext(interaction, interaction.text, interaction.paired_text, interaction.timestamp)
-        result = self.registry.run(actions[0].plugin_id, actions[0].label, context)
-        return PluginResult(result.title, result.body, result.source, result.content_type)

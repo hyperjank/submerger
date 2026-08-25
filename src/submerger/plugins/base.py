@@ -20,6 +20,8 @@ class PluginContext:
     primary_text: str
     secondary_text: str
     timestamp: float | None = None
+    primary_language: str = "en"
+    secondary_language: str = "zh"
 
 
 @dataclass(frozen=True)

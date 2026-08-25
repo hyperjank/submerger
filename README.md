@@ -181,6 +181,23 @@ or alignment dock fills its model, URL, API key, and timeout preset together;
 select Custom to edit those values directly. `SUBMERGER_LLM_API_KEY` may be any non-empty value
 for LM Studio unless your server is configured to require a specific key.
 
+## Dictionary Lookup
+
+Hover over a subtitle word to see a compact definition, or click it to keep the
+full entry open in the Language Tools dock. Lookups use English Wiktionary's
+multilingual definition API, select the primary or secondary subtitle language,
+and include the paired subtitle as context. No API key is required.
+
+Network requests run in the background after a short hover delay, so a slow
+lookup does not block video playback. Results—including missing entries—are
+cached at `~/.cache/submerger/dictionary.json`; previously cached words remain
+available offline. Set `SUBMERGER_DICTIONARY_CACHE` to move the cache or
+`SUBMERGER_DICTIONARY_BASE_URL` to use a compatible endpoint.
+
+Dictionary lookup is deliberately separate from Phrase Explanation: the former
+is a quick word-level reference, while drag-selecting a phrase retains the LLM
+action for grammar, idiom, and contextual explanations.
+
 ## Sentence Diagrams
 
 The built-in sentence diagram plugin calls the configured LLM on demand for the

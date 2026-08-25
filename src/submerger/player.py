@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal, Slot
-from PySide6.QtGui import QAction, QActionGroup, QCursor, QKeySequence, QOpenGLContext
+from PySide6.QtGui import QAction, QActionGroup, QCursor, QKeySequence, QOpenGLContext, QTextDocument
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (
     QDockWidget,
@@ -75,6 +75,37 @@ class PluginWorker(QRunnable):
             self.signals.finished.emit(self.registry.run(self.plugin_id, self.action, self.context))
         except Exception as exc:  # noqa: BLE001 - surface plugin failures in the dock.
             self.signals.failed.emit(str(exc))
+
+
+class HoverPluginWorkerSignals(QObject):
+    finished = Signal(object)
+    failed = Signal(object)
+
+
+class HoverPluginWorker(QRunnable):
+    def __init__(
+        self,
+        registry: PluginRegistry,
+        plugin_id: str,
+        action: str,
+        context: PluginContext,
+        generation: int,
+    ) -> None:
+        super().__init__()
+        self.registry = registry
+        self.plugin_id = plugin_id
+        self.action = action
+        self.context = context
+        self.generation = generation
+        self.signals = HoverPluginWorkerSignals()
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            result = self.registry.run(self.plugin_id, self.action, self.context)
+            self.signals.finished.emit((self.generation, result))
+        except Exception as exc:  # noqa: BLE001 - surface lookup failures in the tooltip.
+            self.signals.failed.emit((self.generation, str(exc)))
 
 
 class DockTitleBar(QWidget):
@@ -224,7 +255,9 @@ class MainWindow(QMainWindow):
         self.thread_pool = QThreadPool.globalInstance()
         self.duration = 0.0
         self._seeking = False
-        self._last_hover_text = ""
+        self._last_hover_key: tuple[str, str, str, float | None] | None = None
+        self._pending_hover_interaction: SubtitleInteraction | None = None
+        self._hover_generation = 0
         self.current_plugin_context: PluginContext | None = None
         self.plugin_action_buttons: list[QPushButton] = []
         self.primary_subtitle_path: str | None = None
@@ -282,6 +315,9 @@ class MainWindow(QMainWindow):
         self.alignment_panel = AlignmentPanel()
         self.alignment_panel.apply_llm_settings(self.llm_settings)
         self.alignment_dock = QDockWidget("Subtitle Alignment", self)
+        self.hover_timer = QTimer(self)
+        self.hover_timer.setSingleShot(True)
+        self.hover_timer.setInterval(250)
 
         self.recent_menu: QMenu | None = None
         self.primary_embedded_menu: QMenu | None = None
@@ -376,6 +412,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(container)
 
         self.plugin_output.setReadOnly(True)
+        self.plugin_output.setOpenExternalLinks(True)
         self.plugin_output.setPlainText("Hover a word for dictionary context. Drag-select a phrase for explanation.")
         self.plugin_output.setStyleSheet(
             """
@@ -492,6 +529,7 @@ class MainWindow(QMainWindow):
         self.position_slider.sliderReleased.connect(self._end_seek)
         self.overlay.interaction_requested.connect(self.handle_subtitle_interaction)
         self.overlay.fullscreen_requested.connect(self.toggle_fullscreen)
+        self.hover_timer.timeout.connect(self.run_pending_hover_lookup)
 
     def open_video(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -1001,10 +1039,20 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def handle_subtitle_interaction(self, interaction) -> None:
-        if interaction.kind == "hover" and interaction.text == self._last_hover_text:
-            return
         if interaction.kind == "hover":
-            self._last_hover_text = interaction.text
+            hover_key = (
+                interaction.text,
+                interaction.language,
+                interaction.paired_text,
+                interaction.timestamp,
+            )
+            if hover_key == self._last_hover_key:
+                return
+            self._last_hover_key = hover_key
+            self._pending_hover_interaction = interaction
+            self._hover_generation += 1
+            self.hover_timer.start()
+            return
 
         if interaction.kind == "selection":
             self.show_plugin_actions(interaction)
@@ -1015,12 +1063,53 @@ class MainWindow(QMainWindow):
         if not actions:
             return
         action = actions[0]
-        result = self.plugin_registry.run(action.plugin_id, action.label, context)
-        if interaction.kind == "hover":
-            QToolTip.showText(QCursor.pos(), tooltip_text(result), self.overlay)
+        if action.plugin_id == "dictionary":
+            self.show_plugin_result(
+                PluginResult(
+                    f"Dictionary: {interaction.text}",
+                    "Looking up Wiktionary…",
+                    "plugin:dictionary:pending",
+                )
+            )
+            worker = PluginWorker(self.plugin_registry, action.plugin_id, action.label, context)
+            worker.signals.finished.connect(self.show_plugin_result)
+            worker.signals.failed.connect(self.show_plugin_error)
+            self.thread_pool.start(worker)
             return
-
+        result = self.plugin_registry.run(action.plugin_id, action.label, context)
         self.show_plugin_result(result)
+
+    def run_pending_hover_lookup(self) -> None:
+        interaction = self._pending_hover_interaction
+        if interaction is None:
+            return
+        context = self.plugin_context_for(interaction)
+        actions = self.plugin_registry.actions_for_event("hover")
+        if not actions:
+            return
+        action = actions[0]
+        generation = self._hover_generation
+        QToolTip.showText(QCursor.pos(), f"Dictionary: {interaction.text}\n\nLooking up…", self.overlay)
+        worker = HoverPluginWorker(
+            self.plugin_registry,
+            action.plugin_id,
+            action.label,
+            context,
+            generation,
+        )
+        worker.signals.finished.connect(self.receive_hover_dictionary_result)
+        worker.signals.failed.connect(self.receive_hover_dictionary_error)
+        self.thread_pool.start(worker)
+
+    def receive_hover_dictionary_result(self, payload: tuple[int, PluginResult]) -> None:
+        generation, result = payload
+        if generation == self._hover_generation:
+            QToolTip.showText(QCursor.pos(), tooltip_text(result), self.overlay)
+
+    def receive_hover_dictionary_error(self, payload: tuple[int, str]) -> None:
+        generation, message = payload
+        if generation == self._hover_generation:
+            QToolTip.showText(QCursor.pos(), f"Dictionary unavailable\n\n{message}", self.overlay)
 
     def show_plugin_actions(self, interaction: SubtitleInteraction) -> None:
         context = self.plugin_context_for(interaction)
@@ -1079,6 +1168,8 @@ class MainWindow(QMainWindow):
             primary_text=primary,
             secondary_text=secondary,
             timestamp=interaction.timestamp,
+            primary_language=self.alignment_panel.primary_language.text().strip() or "en",
+            secondary_language=self.alignment_panel.secondary_language.text().strip() or "zh",
         )
 
     def show_plugin_result(self, result: PluginResult) -> None:
@@ -1160,6 +1251,10 @@ def format_time(value: float | None) -> str:
 
 def tooltip_text(result: PluginResult) -> str:
     body = result.body.strip()
+    if result.content_type == "html":
+        document = QTextDocument()
+        document.setHtml(body)
+        body = document.toPlainText().strip()
     if len(body) > 220:
         body = body[:217].rstrip() + "..."
     return f"{result.title}\n\n{body}"

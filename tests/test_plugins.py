@@ -24,6 +24,13 @@ class PluginTests(unittest.TestCase):
         self.assertIn("Explain Phrase", labels)
         self.assertIn("Diagram Segment", labels)
 
+    def test_default_registry_exposes_real_dictionary_for_words(self) -> None:
+        registry = create_default_registry(include_external=False)
+
+        labels = [action.label for action in registry.actions_for_event("hover")]
+
+        self.assertEqual(labels, ["Dictionary Lookup"])
+
     def test_sentence_diagram_plugin_renders_both_languages(self) -> None:
         def transport(_body):
             return """
