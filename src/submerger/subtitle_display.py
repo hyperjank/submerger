@@ -96,6 +96,7 @@ class InteractiveSubtitleLine(QTextEdit):
 
 class SubtitleOverlay(QWidget):
     interaction_requested = Signal(object)
+    fullscreen_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -121,6 +122,10 @@ class SubtitleOverlay(QWidget):
         self.snapshot = SubtitleSnapshot(primary, secondary, timestamp)
         self.primary.set_subtitle_text(primary)
         self.secondary.set_subtitle_text(secondary)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # type: ignore[override]
+        self.fullscreen_requested.emit()
+        event.accept()
 
     def _on_token_hovered(self, token: SubtitleToken) -> None:
         self.interaction_requested.emit(self._interaction("hover", token.text, token.language, token.index))

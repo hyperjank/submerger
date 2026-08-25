@@ -51,6 +51,23 @@ class SubtitleTrack:
         cue = self.cues[index]
         return cue if cue.contains(timestamp) else None
 
+    def cue_at_or_before(self, timestamp: float | None) -> SubtitleCue | None:
+        if timestamp is None or not self.cues:
+            return None
+        index = bisect_right(self._starts, timestamp) - 1
+        return self.cues[index] if index >= 0 else None
+
+    def adjacent_cue(self, timestamp: float | None, direction: int) -> SubtitleCue | None:
+        if timestamp is None or not self.cues or direction == 0:
+            return None
+        if direction > 0:
+            index = bisect_right(self._starts, timestamp + 0.001)
+            return self.cues[index] if index < len(self.cues) else None
+        index = bisect_right(self._starts, timestamp - 0.001) - 1
+        if index >= 0 and self.cues[index].contains(timestamp):
+            index -= 1
+        return self.cues[index] if index >= 0 else None
+
 
 class DualSubtitleEngine:
     def __init__(self) -> None:
@@ -63,11 +80,20 @@ class DualSubtitleEngine:
     def load_secondary(self, path: str | Path) -> None:
         self.secondary = SubtitleTrack.from_srt(path)
 
-    def active(self, timestamp: float | None) -> tuple[str, str]:
+    def active(
+        self,
+        timestamp: float | None,
+        primary_offset: float = 0.0,
+        secondary_offset: float = 0.0,
+    ) -> tuple[str, str]:
         return (
-            self.primary.active_text(timestamp),
-            self.secondary.active_text(timestamp),
+            self.primary.active_text(offset_timestamp(timestamp, primary_offset)),
+            self.secondary.active_text(offset_timestamp(timestamp, secondary_offset)),
         )
+
+
+def offset_timestamp(timestamp: float | None, delay: float) -> float | None:
+    return None if timestamp is None else timestamp - delay
 
 
 def parse_srt(content: str) -> list[SubtitleCue]:

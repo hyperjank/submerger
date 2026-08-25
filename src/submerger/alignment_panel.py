@@ -249,11 +249,21 @@ class AlignmentPanel(QWidget):
             """
         )
 
-    def set_loaded_paths(self, primary: str | None, secondary: str | None) -> None:
+    def set_loaded_paths(
+        self,
+        primary: str | None,
+        secondary: str | None,
+        *,
+        clear_missing: bool = False,
+    ) -> None:
         if primary:
             self.primary_path.setText(primary)
+        elif clear_missing:
+            self.primary_path.clear()
         if secondary:
             self.secondary_path.setText(secondary)
+        elif clear_missing:
+            self.secondary_path.clear()
 
     def apply_llm_settings(self, settings: LLMEndpointSettings) -> None:
         provider = settings.provider if settings.provider in {"lmstudio", "openai", "deepseek", "custom"} else "custom"

@@ -10,7 +10,9 @@ tracks at the same time.
 - open video, primary subtitle, and secondary subtitle files independently
 - custom SRT parser and clock-driven subtitle renderer
 - simultaneous two-language subtitle display
-- play/pause and seek controls
+- external subtitle autodetection and independent embedded subtitle selection
+- line replay/navigation, speed, subtitle-delay, seek, and fullscreen controls
+- drag-and-drop, recent episodes, and automatic session restoration
 
 ## Requirements
 
@@ -46,6 +48,25 @@ Activation is optional; from the project root you can always launch directly:
 ./.venv/bin/submerger
 ```
 
+Open an episode directly from fish. Language-tagged sidecars such as
+`episode.en.srt`, `episode.zh.srt`, and `episode.alignment.json` are detected
+automatically:
+
+```fish
+./.venv/bin/submerger /path/to/episode.mkv
+```
+
+Override detection when needed:
+
+```fish
+./.venv/bin/submerger /path/to/episode.mkv \
+    --primary /path/to/episode.en.srt \
+    --secondary /path/to/episode.zh.srt
+```
+
+Use `--no-restore` to open an empty player instead of restoring the previous
+episode.
+
 You can also launch without installing the console script:
 
 ```bash
@@ -63,6 +84,34 @@ QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests -v
 Large media samples, generated alignment outputs, local environments, and LLM
 credentials are intentionally excluded from version control. Keep disposable
 alignment runs under `outputs/` or another untracked working directory.
+
+## Everyday Playback
+
+Open one video instead of choosing three files. Submerger searches beside it for
+matching, language-tagged SRT files and an alignment sidecar. You can also drop a
+video, one or two SRT files, or an alignment sidecar onto the window. Text-based
+embedded tracks are available independently under `Subtitles -> Primary
+Embedded Track` and `Secondary Embedded Track`; image-based tracks such as PGS
+cannot feed the interactive text overlay and are marked unavailable.
+
+Playback position, selected files/tracks, speed, and both subtitle delays are
+saved every few seconds and when the window closes. The last episode resumes on
+the next launch, and the ten most recent episodes appear under `File -> Recent
+Episodes`. State is stored at `~/.local/state/submerger/playback.json` by default.
+
+| Action | Shortcut |
+| --- | --- |
+| Play or pause | `Space` |
+| Previous / next subtitle | `Ctrl+Left` / `Ctrl+Right` |
+| Replay current subtitle | `R` |
+| Seek backward / forward 5 seconds | `Left` / `Right` |
+| Slower / faster | `[` / `]` |
+| Reset speed | `Backspace` |
+| Primary subtitle earlier / later | `Z` / `X` |
+| Secondary subtitle earlier / later | `Shift+Z` / `Shift+X` |
+| Reset both subtitle delays | `Ctrl+0` |
+| Fullscreen | `F11` or double-click the video |
+| Leave fullscreen | `Escape` |
 
 ## Align Subtitles
 
