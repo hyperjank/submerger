@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+.env
+node_modules/
+
+# Local alignment runs and media fixtures
+*.alignment-cache.json
+*.alignment.json
+*.clean.srt
+*.aligned.srt
+*.mkv
+*.mp4
+*.avi
+*.mov
+*.webm
+outputs/
