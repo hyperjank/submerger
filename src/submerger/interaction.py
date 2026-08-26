@@ -7,7 +7,7 @@ import re
 import urllib.error
 import urllib.request
 
-from .settings import LLMEndpointSettings, load_llm_settings
+from .settings import LLMEndpointSettings, load_llm_settings, model_supports_custom_temperature
 
 
 TOKEN_RE = re.compile(r"[\w\u3400-\u9fff]+(?:['’-][\w\u3400-\u9fff]+)?|[^\s\w]", re.UNICODE)
@@ -80,7 +80,6 @@ class LMStudioExplanationClient:
     def explain(self, interaction: SubtitleInteraction) -> PluginResult:
         body = {
             "model": self.model,
-            "temperature": 0.2,
             "max_tokens": self.max_tokens,
             "response_format": explanation_response_format(),
             "messages": [
@@ -88,6 +87,8 @@ class LMStudioExplanationClient:
                 {"role": "user", "content": explanation_user_prompt(interaction)},
             ],
         }
+        if model_supports_custom_temperature(self.model):
+            body["temperature"] = 0.2
         if self.transport is not None:
             content = self.transport(body)
         else:

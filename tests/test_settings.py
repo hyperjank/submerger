@@ -3,7 +3,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from submerger.settings import LLMEndpointSettings, load_llm_settings, save_llm_settings, settings_from_provider
+from submerger.settings import (
+    LLMEndpointSettings,
+    load_llm_settings,
+    model_supports_custom_temperature,
+    save_llm_settings,
+    settings_from_provider,
+)
 
 
 class SettingsTests(unittest.TestCase):
@@ -44,6 +50,12 @@ class SettingsTests(unittest.TestCase):
                     os.environ["SUBMERGER_LLM_MODEL"] = old
 
         self.assertEqual(loaded.model, "env-model")
+
+    def test_reasoning_models_omit_custom_temperature(self) -> None:
+        self.assertFalse(model_supports_custom_temperature("gpt-5.6-luna"))
+        self.assertFalse(model_supports_custom_temperature("o3"))
+        self.assertTrue(model_supports_custom_temperature("gpt-4.1-mini"))
+        self.assertTrue(model_supports_custom_temperature("qwen3.5-4b"))
 
 
 if __name__ == "__main__":

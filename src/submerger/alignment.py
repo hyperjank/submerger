@@ -10,6 +10,7 @@ from typing import Callable
 import urllib.error
 import urllib.request
 
+from .settings import model_supports_custom_temperature
 from .subtitles import SubtitleCue, SubtitleTrack, format_srt_timestamp, parse_srt
 
 
@@ -198,13 +199,14 @@ class OpenAICompatibleAlignmentClient:
     def align_batch(self, windows: list[CandidateWindow]) -> list[AlignmentResult]:
         body = {
             "model": self.model,
-            "temperature": 0,
             "response_format": alignment_response_format(),
             "messages": [
                 {"role": "system", "content": ALIGNMENT_SYSTEM_PROMPT},
                 {"role": "user", "content": json.dumps({"windows": [window_payload(w) for w in windows]}, ensure_ascii=False)},
             ],
         }
+        if model_supports_custom_temperature(self.model):
+            body["temperature"] = 0
         request = urllib.request.Request(
             f"{self.base_url}/chat/completions",
             data=json.dumps(body).encode("utf-8"),

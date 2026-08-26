@@ -44,6 +44,12 @@ PROVIDER_PRESETS: dict[str, LLMEndpointSettings] = {
 }
 
 
+def model_supports_custom_temperature(model: str) -> bool:
+    """Return whether an OpenAI-compatible model accepts sampling temperature."""
+    normalized = model.casefold().strip()
+    return not normalized.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
 def default_settings_path() -> Path:
     configured = os.environ.get("SUBMERGER_SETTINGS_PATH")
     if configured:

@@ -7,7 +7,7 @@ import re
 import urllib.error
 import urllib.request
 
-from submerger.settings import LLMEndpointSettings, load_llm_settings
+from submerger.settings import LLMEndpointSettings, load_llm_settings, model_supports_custom_temperature
 
 from .base import PluginAction, PluginContext, PluginResult
 
@@ -67,7 +67,6 @@ class LLMSentenceDiagramClient:
     def diagram(self, context: PluginContext) -> SentenceDiagram:
         body = {
             "model": self.model,
-            "temperature": 0.1,
             "max_tokens": self.max_tokens,
             "response_format": diagram_response_format(),
             "messages": [
@@ -75,6 +74,8 @@ class LLMSentenceDiagramClient:
                 {"role": "user", "content": diagram_user_prompt(context)},
             ],
         }
+        if model_supports_custom_temperature(self.model):
+            body["temperature"] = 0.1
         if self.transport is not None:
             content = self.transport(body)
         else:
