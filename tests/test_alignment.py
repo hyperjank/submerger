@@ -302,6 +302,168 @@ Una traducción compartida.
         self.assertEqual(package.segments[0].status, "repaired")
         self.assertEqual(package.issues, [])
 
+    def test_context_retry_uses_wider_candidates_neighbors_anchors_and_cache(self) -> None:
+        class ContextRetryClient:
+            def __init__(self) -> None:
+                self.initial_calls = 0
+                self.retry_calls = 0
+
+            def align_batch(self, windows):
+                self.initial_calls += 1
+                return [
+                    AlignmentResult(windows[0].primary.segment_id, ["1"], 0.95, "anchor before"),
+                    AlignmentResult(windows[1].primary.segment_id, [], 0.1, "no nearby match"),
+                    AlignmentResult(windows[2].primary.segment_id, ["4"], 0.95, "anchor after"),
+                ]
+
+            def align_batch_with_context(self, regions):
+                self.retry_calls += 1
+                self.assert_retry_region(regions[0])
+                return [
+                    AlignmentResult(
+                        regions[0]["target"]["primary"]["segment_id"],
+                        ["3"],
+                        0.92,
+                        "resolved from wider context",
+                    )
+                ]
+
+            @staticmethod
+            def assert_retry_region(region):
+                candidate_ids = {
+                    cue["cue_id"] for cue in region["target"]["secondary_candidates"]
+                }
+                neighbor_ids = {
+                    primary["segment_id"] for primary in region["neighboring_primary"]
+                }
+                anchor_ids = {
+                    anchor["primary_id"] for anchor in region["accepted_neighbor_mappings"]
+                }
+                assert candidate_ids == {"2", "3"}
+                assert neighbor_ids == {"p_00001", "p_00003"}
+                assert anchor_ids == {"p_00001", "p_00003"}
+                assert region["first_attempt"]["secondary_cue_ids"] == []
+
+        primary_srt = """1
+00:00:10,000 --> 00:00:11,000
+Before.
+
+2
+00:00:20,000 --> 00:00:21,000
+Target.
+
+3
+00:00:30,000 --> 00:00:31,000
+After.
+"""
+        secondary_srt = """1
+00:00:10,000 --> 00:00:11,000
+Antes.
+
+2
+00:00:22,000 --> 00:00:22,500
+Unrelated.
+
+3
+00:00:25,000 --> 00:00:26,000
+Objetivo.
+
+4
+00:00:30,000 --> 00:00:31,000
+Después.
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            primary_path = tmp_path / "primary.srt"
+            secondary_path = tmp_path / "secondary.srt"
+            cache_path = tmp_path / "alignment-cache.json"
+            primary_path.write_text(primary_srt, encoding="utf-8")
+            secondary_path.write_text(secondary_srt, encoding="utf-8")
+            client = ContextRetryClient()
+
+            package = align_subtitles(
+                primary_path,
+                secondary_path,
+                client=client,
+                cache_path=cache_path,
+            )
+            cached_package = align_subtitles(
+                primary_path,
+                secondary_path,
+                client=client,
+                cache_path=cache_path,
+            )
+            sidecar_path = write_alignment_sidecar(package, tmp_path / "episode")
+            reloaded_package = load_alignment_package(sidecar_path)
+
+        target = next(
+            segment for segment in package.segments if segment.segment_id == "p_00002"
+        )
+        self.assertEqual(target.secondary_cue_ids, ["3"])
+        self.assertEqual(target.alignment_stage, "context_retry")
+        self.assertEqual(target.alignment_notes, "resolved from wider context")
+        self.assertEqual(package.issues, [])
+        self.assertEqual(cached_package.segments, package.segments)
+        reloaded_target = next(
+            segment
+            for segment in reloaded_package.segments
+            if segment.segment_id == "p_00002"
+        )
+        self.assertEqual(reloaded_target.alignment_stage, "context_retry")
+        self.assertEqual(reloaded_target.alignment_notes, "resolved from wider context")
+        self.assertEqual(reloaded_package.schema_version, 4)
+        self.assertEqual(client.initial_calls, 1)
+        self.assertEqual(client.retry_calls, 1)
+
+    def test_context_retry_cannot_overturn_semantic_rejection_without_structure(self) -> None:
+        class OvereagerRetryClient:
+            def align_batch(self, windows):
+                return [
+                    AlignmentResult(
+                        windows[0].primary.segment_id,
+                        [],
+                        0.1,
+                        "candidate does not match",
+                    )
+                ]
+
+            def align_batch_with_context(self, regions):
+                return [
+                    AlignmentResult(
+                        regions[0]["target"]["primary"]["segment_id"],
+                        ["1"],
+                        0.99,
+                        "plausible localization",
+                    )
+                ]
+
+        primary_srt = """1
+00:00:20,000 --> 00:00:21,000
+Center ice shot, baby!
+"""
+        secondary_srt = """1
+00:00:20,000 --> 00:00:21,000
+News flash, babies!
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            primary_path = tmp_path / "primary.srt"
+            secondary_path = tmp_path / "secondary.srt"
+            primary_path.write_text(primary_srt, encoding="utf-8")
+            secondary_path.write_text(secondary_srt, encoding="utf-8")
+
+            package = align_subtitles(
+                primary_path,
+                secondary_path,
+                client=OvereagerRetryClient(),
+            )
+
+        segment = package.segments[0]
+        self.assertEqual(segment.secondary_cue_ids, [])
+        self.assertEqual(segment.alignment_stage, "context_retry")
+        self.assertIn("kept the first pass", segment.alignment_notes)
+        self.assertEqual(len(package.issues), 1)
+
     def test_alignment_cache_round_trips_batch_results(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "cache.json"
@@ -352,6 +514,7 @@ Una traducción compartida.
             reloaded = load_alignment_package(sidecar)
 
         self.assertEqual(reloaded.segments[0].status, "reviewed")
+        self.assertEqual(reloaded.segments[0].alignment_stage, "human_review")
         self.assertEqual(reloaded.segments[0].primary_segment_ids, ["p_1"])
         self.assertEqual(reloaded.segments[0].secondary_text, "Hola.")
         primary, secondary = tracks_from_alignment_package(reloaded)

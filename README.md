@@ -159,6 +159,20 @@ Malformed model responses and low-confidence shared boundaries are repaired
 where safe. Only unresolved blocks become explicit review items; automatic
 repairs remain recorded in the sidecar without cluttering the review queue.
 
+OpenAI-compatible runs retry unresolved mappings once by default. The retry
+receives a wider secondary-cue window, three neighboring primary segments on
+each side, chronological secondary context, the first attempt, and accepted
+neighbor mappings as anchors. A conservative gate accepts changed mappings only
+when there is structural evidence such as a newly visible cue or a shared
+boundary; extra context alone cannot overturn an initial semantic rejection.
+Retry responses are cached, and schema 4 sidecars record whether each block came
+from the initial pass, context retry, or human review.
+
+Use `--no-context-retry` to disable the retry. Advanced CLI controls are
+`--retry-context-segments` and `--retry-pad-seconds`. The alignment panel exposes
+the normal on/off choice as `Retry unresolved mappings with surrounding
+dialogue`.
+
 The same pipeline is available in the player through the `Align` button. The
 alignment dock can use the currently loaded subtitle paths, run heuristic or
 OpenAI-compatible alignment in the background, and show per-batch progress. Its

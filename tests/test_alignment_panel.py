@@ -34,6 +34,7 @@ class AlignmentPanelTests(unittest.TestCase):
         self.assertEqual(config["base_url"], "http://192.168.86.113:1234/v1")
         self.assertEqual(config["model"], "qwen3.5-4b")
         self.assertEqual(config["provider"], "lmstudio")
+        self.assertTrue(config["context_retry"])
 
     def test_apply_llm_settings_updates_endpoint_fields(self) -> None:
         panel = AlignmentPanel()

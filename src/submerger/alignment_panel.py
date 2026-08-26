@@ -75,6 +75,7 @@ class AlignmentWorker(QRunnable):
                 batch_size=int(self.config["batch_size"]),
                 progress=progress,
                 cache_path=alignment_artifact_path(output_prefix, ".alignment-cache.json"),
+                context_retry=bool(self.config.get("context_retry", True)),
             )
             sidecar_path = alignment_artifact_path(output_prefix, ".alignment.json")
             if sidecar_path.exists():
@@ -132,6 +133,10 @@ class AlignmentPanel(QWidget):
         self.export_srt.setChecked(False)
         self.load_when_done = QCheckBox("Load alignment in player when finished")
         self.load_when_done.setChecked(False)
+        self.context_retry = QCheckBox(
+            "Retry unresolved mappings with surrounding dialogue"
+        )
+        self.context_retry.setChecked(True)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
 
@@ -151,6 +156,7 @@ class AlignmentPanel(QWidget):
         self.primary_review.setPlaceholderText("Primary segment")
         self.candidate_list = QListWidget()
         self.review_status = QLabel("")
+        self.review_status.setWordWrap(True)
         self.approve_button = QPushButton("Approve Current Selection")
         self.apply_selection_button = QPushButton("Apply Checked Cues")
         self.save_review_button = QPushButton("Save Alignment")
@@ -194,6 +200,7 @@ class AlignmentPanel(QWidget):
         run_layout.addLayout(form)
         run_layout.addWidget(self.export_srt)
         run_layout.addWidget(self.load_when_done)
+        run_layout.addWidget(self.context_retry)
         run_layout.addLayout(buttons)
         run_layout.addWidget(QLabel("Progress"))
         run_layout.addWidget(self.log, 1)
@@ -311,6 +318,7 @@ class AlignmentPanel(QWidget):
             "primary_language": self.primary_language.text(),
             "secondary_language": self.secondary_language.text(),
             "export_srt": self.export_srt.isChecked(),
+            "context_retry": self.context_retry.isChecked(),
         }
 
     def mark_finished(self, result: dict) -> None:
@@ -440,9 +448,16 @@ class AlignmentPanel(QWidget):
             )
             self.candidate_list.addItem(item)
         problem_text = "; ".join(segment.problems) or "No validator problems."
-        self.review_status.setText(
-            f"Status: {segment.status} · confidence {segment.confidence:.2f} · {problem_text}"
+        model_note = (
+            f"\nModel note: {segment.alignment_notes}"
+            if segment.alignment_notes
+            else ""
         )
+        self.review_status.setText(
+            f"Status: {segment.status} · {segment.alignment_stage.replace('_', ' ')} · "
+            f"confidence {segment.confidence:.2f} · {problem_text}{model_note}"
+        )
+        self.review_status.setToolTip(segment.alignment_notes)
         self.approve_button.setEnabled(True)
         self.apply_selection_button.setEnabled(True)
 

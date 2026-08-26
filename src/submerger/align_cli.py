@@ -27,6 +27,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=float, default=180.0, help="Per-request timeout in seconds.")
     parser.add_argument("--batch-size", type=int, default=12)
     parser.add_argument("--pad-seconds", type=float, default=3.0)
+    parser.add_argument(
+        "--no-context-retry",
+        action="store_true",
+        help="Do not retry unresolved OpenAI mappings with wider neighboring context.",
+    )
+    parser.add_argument(
+        "--retry-context-segments",
+        type=int,
+        default=3,
+        help="Neighboring primary segments to include on each side of a retry target.",
+    )
+    parser.add_argument(
+        "--retry-pad-seconds",
+        type=float,
+        default=8.0,
+        help="Secondary-cue time padding for context retries.",
+    )
     parser.add_argument("--quiet", action="store_true", help="Do not print per-batch progress.")
     parser.add_argument("--keep-non-dialogue", action="store_true", help="Keep SDH-only, ad, and positioned annotation cues.")
     parser.add_argument("--no-cache", action="store_true", help="Disable per-batch alignment cache/resume.")
@@ -56,6 +73,9 @@ def main(argv: list[str] | None = None) -> int:
         progress=None if args.quiet else print_progress,
         drop_non_dialogue=not args.keep_non_dialogue,
         cache_path=None if args.no_cache else alignment_artifact_path(output_prefix, ".alignment-cache.json"),
+        context_retry=not args.no_context_retry,
+        retry_context_segments=max(0, args.retry_context_segments),
+        retry_pad_seconds=max(args.pad_seconds, args.retry_pad_seconds),
     )
     paths = write_alignment_outputs(package, output_prefix)
     print(f"Wrote {paths[2]}")

@@ -14,8 +14,8 @@ from .settings import model_supports_custom_temperature
 from .subtitles import SubtitleCue, SubtitleTrack, format_srt_timestamp, parse_srt
 
 
-ALIGNMENT_SCHEMA_VERSION = 3
-ALIGNMENT_PIPELINE_VERSION = "2026-08-25.3"
+ALIGNMENT_SCHEMA_VERSION = 4
+ALIGNMENT_PIPELINE_VERSION = "2026-08-25.4"
 
 
 SENTENCE_END_RE = re.compile(r'[.!?。！？]["\'”’)\]]*$')
@@ -54,6 +54,7 @@ class AlignmentResult:
     secondary_cue_ids: list[str]
     confidence: float
     notes: str = ""
+    stage: str = "initial"
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,8 @@ class PairedSegment:
     problems: list[str] = field(default_factory=list)
     candidate_secondary_cues: list[SubtitleCue] = field(default_factory=list)
     primary_segment_ids: list[str] = field(default_factory=list)
+    alignment_notes: str = ""
+    alignment_stage: str = "initial"
 
 
 @dataclass(frozen=True)
@@ -198,12 +201,27 @@ class OpenAICompatibleAlignmentClient:
         }
 
     def align_batch(self, windows: list[CandidateWindow]) -> list[AlignmentResult]:
+        return self._request_alignments(
+            ALIGNMENT_SYSTEM_PROMPT,
+            {"windows": [window_payload(window) for window in windows]},
+        )
+
+    def align_batch_with_context(self, regions: list[dict]) -> list[AlignmentResult]:
+        return [
+            replace(result, stage="context_retry")
+            for result in self._request_alignments(
+                CONTEXT_RETRY_SYSTEM_PROMPT,
+                {"retry_regions": regions},
+            )
+        ]
+
+    def _request_alignments(self, system_prompt: str, request_payload: dict) -> list[AlignmentResult]:
         body = {
             "model": self.model,
             "response_format": alignment_response_format(),
             "messages": [
-                {"role": "system", "content": ALIGNMENT_SYSTEM_PROMPT},
-                {"role": "user", "content": json.dumps({"windows": [window_payload(w) for w in windows]}, ensure_ascii=False)},
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(request_payload, ensure_ascii=False)},
             ],
         }
         if model_supports_custom_temperature(self.model):
@@ -239,6 +257,14 @@ Return only JSON with an "alignments" array.
 For each primary segment, choose only secondary cue ids from the provided candidates that match the complete semantic content of the primary text.
 Return cue ids, not rewritten text. Preserve monotonic order. A secondary cue may legitimately cover multiple adjacent primary segments; reuse it only for each segment whose meaning it actually contains, and the caller will merge those segments into one N:M alignment block.
 Do not add a nearby reaction, interjection, setup line, or repeated cue unless its meaning appears in the current primary segment. Timing, similar tone, or a plausible-sounding localization is not enough: concrete meaning must match, even when paraphrased. Prefer an empty list with low confidence over an unrelated temporal neighbor.
+Each item must include primary_id, secondary_cue_ids, confidence from 0 to 1, and notes."""
+
+
+CONTEXT_RETRY_SYSTEM_PROMPT = """You are retrying uncertain bilingual subtitle alignments for language learning.
+Return only JSON with an "alignments" array and exactly one result for each retry region's target primary_id.
+Each region contains the target and its wider secondary candidates, neighboring primary dialogue, chronological secondary context, the first attempt, and accepted neighboring mappings that act as anchors.
+Use the added context to resolve subtitle-boundary differences, shared cues, or timing drift. Select ids only from the target's secondary_candidates. Do not change or return results for neighboring primary segments.
+Do not force a match when the translation omits the target, or when the target is only a sound, SDH annotation, song fragment, or track metadata. Timing, similar tone, and plausible localization are not semantic evidence. Prefer an empty list with low confidence over unrelated dialogue.
 Each item must include primary_id, secondary_cue_ids, confidence from 0 to 1, and notes."""
 
 
@@ -282,11 +308,17 @@ class AlignmentValidator:
                 if not 0.0 <= raw_confidence <= 1.0:
                     problems.append("confidence outside 0..1")
                 notes = "; ".join(dict.fromkeys(entry.notes for entry in entries if entry.notes))
+                stage = (
+                    "context_retry"
+                    if any(entry.stage == "context_retry" for entry in entries)
+                    else entries[0].stage
+                )
                 result = AlignmentResult(
                     window.primary.segment_id,
                     unique_ids,
                     min(1.0, max(0.0, raw_confidence)),
                     notes,
+                    stage,
                 )
 
             candidate_lookup = {cue.cue_id: cue for cue in window.secondary_cues}
@@ -344,6 +376,9 @@ def build_alignment_identity(
     batch_size: int,
     pad_seconds: float,
     drop_non_dialogue: bool,
+    context_retry: bool,
+    retry_context_segments: int,
+    retry_pad_seconds: float,
 ) -> dict:
     client_identity = (
         client.cache_identity()
@@ -359,6 +394,9 @@ def build_alignment_identity(
         "batch_size": batch_size,
         "pad_seconds": pad_seconds,
         "drop_non_dialogue": drop_non_dialogue,
+        "context_retry": context_retry,
+        "retry_context_segments": retry_context_segments,
+        "retry_pad_seconds": retry_pad_seconds,
         "client": client_identity,
     }
 
@@ -383,6 +421,9 @@ def align_subtitles(
     progress: Callable[[int, int], None] | None = None,
     drop_non_dialogue: bool = True,
     cache_path: str | Path | None = None,
+    context_retry: bool = True,
+    retry_context_segments: int = 3,
+    retry_pad_seconds: float = 8.0,
 ) -> AlignmentPackage:
     primary = SubtitleDocument.from_srt(primary_path, primary_language)
     secondary = SubtitleDocument.from_srt(secondary_path, secondary_language)
@@ -402,6 +443,9 @@ def align_subtitles(
         batch_size=batch_size,
         pad_seconds=pad_seconds,
         drop_non_dialogue=drop_non_dialogue,
+        context_retry=context_retry,
+        retry_context_segments=retry_context_segments,
+        retry_pad_seconds=retry_pad_seconds,
     )
 
     cached_batches = load_alignment_cache(cache_path, expected_identity=cache_identity)
@@ -420,6 +464,24 @@ def align_subtitles(
         raw_results.extend(batch_results)
 
     validated = AlignmentValidator().validate(raw_results, windows)
+    retry_method = getattr(client, "align_batch_with_context", None)
+    if context_retry and callable(retry_method):
+        raw_results, windows = retry_unresolved_with_context(
+            raw_results=raw_results,
+            windows=windows,
+            secondary=secondary,
+            validated=validated,
+            retry_method=retry_method,
+            retry_context_segments=retry_context_segments,
+            retry_pad_seconds=max(pad_seconds, retry_pad_seconds),
+            retry_batch_size=batch_size,
+            cached_batches=cached_batches,
+            cache_path=cache_path,
+            cache_identity=cache_identity,
+            completed_batches=total_batches,
+            progress=progress,
+        )
+        validated = AlignmentValidator().validate(raw_results, windows)
     paired = build_alignment_blocks(windows, validated)
     expected_ids = {window.primary.segment_id for window in windows}
     issues = [alignment_block_issue(segment) for segment in paired if segment.status == "needs_review"]
@@ -437,6 +499,220 @@ def align_subtitles(
         secondary_source=str(Path(secondary_path).resolve()),
         cache_identity=cache_identity,
     )
+
+
+def retry_unresolved_with_context(
+    *,
+    raw_results: list[AlignmentResult],
+    windows: list[CandidateWindow],
+    secondary: SubtitleDocument,
+    validated: list[ValidatedAlignment],
+    retry_method: Callable[[list[dict]], list[AlignmentResult]],
+    retry_context_segments: int,
+    retry_pad_seconds: float,
+    retry_batch_size: int,
+    cached_batches: dict[str, list[AlignmentResult]],
+    cache_path: str | Path | None,
+    cache_identity: dict,
+    completed_batches: int,
+    progress: Callable[[int, int], None] | None,
+) -> tuple[list[AlignmentResult], list[CandidateWindow]]:
+    retry_validated = promote_shared_boundary_cues(windows, validated)
+    expected_ids = {window.primary.segment_id for window in windows}
+    unresolved_ids = [
+        item.result.primary_id
+        for item in retry_validated
+        if item.result.primary_id in expected_ids and item.status == "needs_review"
+    ]
+    if not unresolved_ids:
+        return raw_results, windows
+
+    wide_windows = SecondaryWindowBuilder(
+        pad_seconds=retry_pad_seconds,
+        max_pad_seconds=max(10.0, retry_pad_seconds),
+    ).build([window.primary for window in windows], secondary)
+    window_indices = {
+        window.primary.segment_id: index for index, window in enumerate(windows)
+    }
+    validated_lookup = {
+        item.result.primary_id: item
+        for item in retry_validated
+        if item.result.primary_id in expected_ids
+    }
+    final_windows = list(windows)
+    final_results = list(raw_results)
+    retry_chunks = [
+        unresolved_ids[index : index + retry_batch_size]
+        for index in range(0, len(unresolved_ids), retry_batch_size)
+    ]
+    total_batches = completed_batches + len(retry_chunks)
+
+    for retry_number, target_ids in enumerate(retry_chunks, start=1):
+        if progress is not None:
+            progress(completed_batches + retry_number, total_batches)
+        cache_key = f"retry:{retry_number}:{target_ids[0]}-{target_ids[-1]}"
+        retry_results = cached_batches.get(cache_key)
+        if retry_results is None:
+            regions = build_context_retry_regions(
+                target_ids=target_ids,
+                windows=windows,
+                wide_windows=wide_windows,
+                validated_lookup=validated_lookup,
+                context_radius=retry_context_segments,
+            )
+            retry_results = retry_method(regions)
+            cached_batches[cache_key] = retry_results
+            save_alignment_cache(cache_path, cached_batches, identity=cache_identity)
+
+        proposed_lookup = {
+            result.primary_id: replace(result, stage="context_retry")
+            for result in retry_results
+            if result.primary_id in target_ids
+        }
+        retry_lookup = {
+            primary_id: choose_context_retry_result(
+                initial=validated_lookup[primary_id],
+                proposed=proposed,
+                original_window=windows[window_indices[primary_id]],
+                wide_window=wide_windows[window_indices[primary_id]],
+                accepted_neighbor_cue_ids=accepted_neighbor_cue_ids(
+                    primary_id,
+                    windows,
+                    validated_lookup,
+                    retry_context_segments,
+                ),
+            )
+            for primary_id, proposed in proposed_lookup.items()
+        }
+        replaced_ids = set(retry_lookup)
+        if not replaced_ids:
+            continue
+        final_results = [
+            result for result in final_results if result.primary_id not in replaced_ids
+        ]
+        final_results.extend(retry_lookup.values())
+        for primary_id in replaced_ids:
+            final_windows[window_indices[primary_id]] = wide_windows[window_indices[primary_id]]
+
+    return final_results, final_windows
+
+
+def choose_context_retry_result(
+    *,
+    initial: ValidatedAlignment,
+    proposed: AlignmentResult,
+    original_window: CandidateWindow,
+    wide_window: CandidateWindow,
+    accepted_neighbor_cue_ids: set[str],
+) -> AlignmentResult:
+    proposed_ids = set(proposed.secondary_cue_ids)
+    if not proposed_ids:
+        return proposed
+
+    wide_candidate_ids = {cue.cue_id for cue in wide_window.secondary_cues}
+    if not proposed_ids <= wide_candidate_ids:
+        return rejected_context_retry_result(initial, proposed)
+
+    original_candidate_ids = {cue.cue_id for cue in original_window.secondary_cues}
+    initial_proposed_ids = set(initial.result.secondary_cue_ids)
+    recovered_missing_response = "missing alignment result" in initial.problems
+    uses_wider_candidate = bool(proposed_ids - original_candidate_ids)
+    confirms_first_proposal = bool(proposed_ids & initial_proposed_ids)
+    shares_neighbor_anchor = bool(proposed_ids & accepted_neighbor_cue_ids)
+    has_structural_evidence = (
+        recovered_missing_response
+        or uses_wider_candidate
+        or confirms_first_proposal
+        or shares_neighbor_anchor
+    )
+    if has_structural_evidence and proposed.confidence >= 0.75:
+        return proposed
+    return rejected_context_retry_result(initial, proposed)
+
+
+def rejected_context_retry_result(
+    initial: ValidatedAlignment,
+    proposed: AlignmentResult,
+) -> AlignmentResult:
+    retry_note = proposed.notes or "proposed a mapping without structural evidence"
+    notes = "; ".join(filter(None, (
+        initial.result.notes,
+        f"Context retry kept the first pass: {retry_note}",
+    )))
+    return replace(initial.result, notes=notes, stage="context_retry")
+
+
+def accepted_neighbor_cue_ids(
+    primary_id: str,
+    windows: list[CandidateWindow],
+    validated_lookup: dict[str, ValidatedAlignment],
+    context_radius: int,
+) -> set[str]:
+    index = next(
+        index
+        for index, window in enumerate(windows)
+        if window.primary.segment_id == primary_id
+    )
+    start = max(0, index - context_radius)
+    end = min(len(windows), index + context_radius + 1)
+    return {
+        cue_id
+        for window in windows[start:end]
+        if window.primary.segment_id != primary_id
+        for cue_id in validated_lookup[window.primary.segment_id].accepted_secondary_cue_ids
+    }
+
+
+def build_context_retry_regions(
+    *,
+    target_ids: list[str],
+    windows: list[CandidateWindow],
+    wide_windows: list[CandidateWindow],
+    validated_lookup: dict[str, ValidatedAlignment],
+    context_radius: int,
+) -> list[dict]:
+    window_indices = {
+        window.primary.segment_id: index for index, window in enumerate(windows)
+    }
+    regions: list[dict] = []
+    for primary_id in target_ids:
+        index = window_indices[primary_id]
+        start = max(0, index - context_radius)
+        end = min(len(windows), index + context_radius + 1)
+        context_windows = windows[start:end]
+        context_cues = unique_sorted_cues([
+            cue
+            for window in context_windows
+            for cue in window.secondary_cues
+        ] + list(wide_windows[index].secondary_cues))
+        anchors = []
+        for window in context_windows:
+            neighbor_id = window.primary.segment_id
+            if neighbor_id == primary_id:
+                continue
+            accepted = validated_lookup.get(neighbor_id)
+            if accepted is None or not accepted.accepted_secondary_cue_ids:
+                continue
+            anchors.append({
+                "primary_id": neighbor_id,
+                "secondary_cue_ids": accepted.accepted_secondary_cue_ids,
+                "confidence": accepted.result.confidence,
+            })
+        initial = validated_lookup[primary_id].result
+        regions.append({
+            "target": window_payload(wide_windows[index]),
+            "first_attempt": asdict(initial),
+            "neighboring_primary": [
+                asdict(window.primary)
+                for window in context_windows
+                if window.primary.segment_id != primary_id
+            ],
+            "chronological_secondary_context": [
+                cue_payload(cue) for cue in context_cues
+            ],
+            "accepted_neighbor_mappings": anchors,
+        })
+    return regions
 
 
 def make_paired_segment(
@@ -479,6 +755,8 @@ def make_paired_segment(
         problems=validated.problems,
         candidate_secondary_cues=list(window.secondary_cues),
         primary_segment_ids=[segment.segment_id],
+        alignment_notes=validated.result.notes,
+        alignment_stage=validated.result.stage,
     )
 
 
@@ -603,6 +881,14 @@ def merge_alignment_blocks(left: PairedSegment, right: PairedSegment) -> PairedS
             *(left.primary_segment_ids or [left.segment_id]),
             *(right.primary_segment_ids or [right.segment_id]),
         ))),
+        alignment_notes="; ".join(dict.fromkeys(
+            note for note in (left.alignment_notes, right.alignment_notes) if note
+        )),
+        alignment_stage=(
+            "context_retry"
+            if "context_retry" in {left.alignment_stage, right.alignment_stage}
+            else left.alignment_stage
+        ),
     )
 
 
@@ -618,6 +904,7 @@ def alignment_block_issue(segment: PairedSegment) -> ValidatedAlignment:
             list(segment.secondary_cue_ids),
             segment.confidence,
             "alignment block requires review",
+            segment.alignment_stage,
         ),
         status=segment.status,
         problems=list(segment.problems),
@@ -722,6 +1009,8 @@ def paired_segment_from_dict(data: dict) -> PairedSegment:
         primary_segment_ids=[
             str(value) for value in data.get("primary_segment_ids", [])
         ] or [str(data.get("segment_id", ""))],
+        alignment_notes=str(data.get("alignment_notes", "")),
+        alignment_stage=str(data.get("alignment_stage", "initial")),
     )
 
 
@@ -742,6 +1031,7 @@ def validated_alignment_from_dict(data: dict) -> ValidatedAlignment:
         secondary_cue_ids=[str(value) for value in result_data.get("secondary_cue_ids", [])],
         confidence=float(result_data.get("confidence", 0)),
         notes=str(result_data.get("notes", "")),
+        stage=str(result_data.get("stage", "initial")),
     )
     return ValidatedAlignment(
         result=result,
@@ -804,6 +1094,7 @@ def review_alignment_segment(
                 confidence=1.0,
                 status="reviewed",
                 problems=[],
+                alignment_stage="human_review",
             )
             issues = [
                 issue
@@ -825,6 +1116,7 @@ def review_alignment_segment(
             confidence=1.0,
             status="reviewed",
             problems=[],
+            alignment_stage="human_review",
         )
         issues = [
             issue
@@ -874,6 +1166,8 @@ def carry_forward_human_reviews(
                 confidence=1.0,
                 status="reviewed",
                 problems=[],
+                alignment_notes=old.alignment_notes,
+                alignment_stage="human_review",
             )
         )
         retained_ids.add(segment.segment_id)
@@ -936,10 +1230,16 @@ def is_non_dialogue_cue(cue: SubtitleCue) -> bool:
 def window_payload(window: CandidateWindow) -> dict:
     return {
         "primary": asdict(window.primary),
-        "secondary_candidates": [
-            {"cue_id": cue.cue_id, "start": cue.start, "end": cue.end, "text": cue.text}
-            for cue in window.secondary_cues
-        ],
+        "secondary_candidates": [cue_payload(cue) for cue in window.secondary_cues],
+    }
+
+
+def cue_payload(cue: SubtitleCue) -> dict:
+    return {
+        "cue_id": cue.cue_id,
+        "start": cue.start,
+        "end": cue.end,
+        "text": cue.text,
     }
 
 
@@ -968,6 +1268,7 @@ def load_alignment_cache(
                 secondary_cue_ids=[str(cue_id) for cue_id in item.get("secondary_cue_ids", [])],
                 confidence=float(item.get("confidence", 0)),
                 notes=str(item.get("notes", "")),
+                stage=str(item.get("stage", "initial")),
             )
             for item in value
         ]
