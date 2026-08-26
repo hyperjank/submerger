@@ -148,11 +148,16 @@ OPENAI_API_KEY=... submerger-align primary.en.srt secondary.zh.srt \
 The LLM prompt asks for secondary cue ids, not rewritten subtitle text. Submerger
 then builds the aligned secondary subtitle locally from the selected source cues
 and assigns the primary segment timestamps only when an SRT export is requested.
+Adjacent primary segments that share or cross the same secondary cues are merged
+into monotonic N:M alignment blocks. The sidecar preserves every contributing
+primary segment and source cue id, while the player receives one coherent paired
+segment instead of treating legitimate cue reuse as an error.
 
 Alignment caches are reused only when both source-file hashes, languages, model,
 endpoint, prompt/pipeline version, batching, and window settings still match.
-Malformed model responses are repaired where safe and otherwise become explicit
-review items; they cannot silently overwrite another segment.
+Malformed model responses and low-confidence shared boundaries are repaired
+where safe. Only unresolved blocks become explicit review items; automatic
+repairs remain recorded in the sidecar without cluttering the review queue.
 
 The same pipeline is available in the player through the `Align` button. The
 alignment dock can use the currently loaded subtitle paths, run heuristic or

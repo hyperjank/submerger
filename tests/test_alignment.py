@@ -15,6 +15,7 @@ from submerger.alignment import (
     SecondaryWindowBuilder,
     SubtitleDocument,
     align_subtitles,
+    build_alignment_blocks,
     filter_dialogue_document,
     has_terminal_sentence_end,
     load_alignment_cache,
@@ -103,7 +104,7 @@ class AlignmentTests(unittest.TestCase):
 
         self.assertEqual([cue.cue_id for cue in filtered.cues], ["2"])
 
-    def test_validator_flags_reuse_low_confidence_and_order(self) -> None:
+    def test_validator_allows_reuse_and_repairs_internal_order(self) -> None:
         cue_1 = SubtitleCue(5, 6, "uno", "1")
         cue_2 = SubtitleCue(7, 8, "dos", "2")
         windows = [
@@ -119,9 +120,98 @@ class AlignmentTests(unittest.TestCase):
 
         self.assertEqual(validated[0].status, "ok")
         self.assertEqual(validated[1].status, "repaired")
-        self.assertIn("reused secondary cue ids: 1", validated[1].problems)
         self.assertIn("non-monotonic secondary order", validated[1].problems)
-        self.assertEqual(validated[1].accepted_secondary_cue_ids, ["2"])
+        self.assertNotIn("reused secondary cue ids: 1", validated[1].problems)
+        self.assertEqual(validated[1].accepted_secondary_cue_ids, ["1", "2"])
+
+    def test_shared_secondary_cue_builds_one_many_to_many_block(self) -> None:
+        cue_1 = SubtitleCue(5, 6, "共同字幕", "1")
+        cue_2 = SubtitleCue(6, 8, "第二部分", "2")
+        windows = [
+            CandidateWindow(PrimarySegment("p_1", 5, 6, "First.", ["p1"]), [cue_1]),
+            CandidateWindow(PrimarySegment("p_2", 6, 8, "Second.", ["p2"]), [cue_1, cue_2]),
+        ]
+        validated = AlignmentValidator().validate(
+            [
+                AlignmentResult("p_1", ["1"], 0.9),
+                AlignmentResult("p_2", ["1", "2"], 0.9),
+            ],
+            windows,
+        )
+
+        blocks = build_alignment_blocks(windows, validated)
+
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0].segment_id, "p_1")
+        self.assertEqual(blocks[0].primary_segment_ids, ["p_1", "p_2"])
+        self.assertEqual(blocks[0].primary_cue_ids, ["p1", "p2"])
+        self.assertEqual(blocks[0].secondary_cue_ids, ["1", "2"])
+        self.assertEqual(blocks[0].primary_text, "First. Second.")
+        self.assertEqual(blocks[0].secondary_text, "共同字幕 第二部分")
+        self.assertEqual(blocks[0].status, "ok")
+
+    def test_monotonic_disjoint_mappings_remain_separate_blocks(self) -> None:
+        cue_1 = SubtitleCue(5, 6, "一", "1")
+        cue_2 = SubtitleCue(7, 8, "二", "2")
+        windows = [
+            CandidateWindow(PrimarySegment("p_1", 5, 6, "One.", ["p1"]), [cue_1]),
+            CandidateWindow(PrimarySegment("p_2", 7, 8, "Two.", ["p2"]), [cue_2]),
+        ]
+        validated = AlignmentValidator().validate(
+            [
+                AlignmentResult("p_1", ["1"], 0.9),
+                AlignmentResult("p_2", ["2"], 0.9),
+            ],
+            windows,
+        )
+
+        blocks = build_alignment_blocks(windows, validated)
+
+        self.assertEqual([block.segment_id for block in blocks], ["p_1", "p_2"])
+
+    def test_crossing_mappings_become_one_repaired_monotonic_block(self) -> None:
+        cue_1 = SubtitleCue(5, 6, "一", "1")
+        cue_2 = SubtitleCue(7, 8, "二", "2")
+        windows = [
+            CandidateWindow(PrimarySegment("p_1", 5, 6, "One.", ["p1"]), [cue_1, cue_2]),
+            CandidateWindow(PrimarySegment("p_2", 7, 8, "Two.", ["p2"]), [cue_1, cue_2]),
+        ]
+        validated = AlignmentValidator().validate(
+            [
+                AlignmentResult("p_1", ["2"], 0.9),
+                AlignmentResult("p_2", ["1"], 0.9),
+            ],
+            windows,
+        )
+
+        blocks = build_alignment_blocks(windows, validated)
+
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0].secondary_cue_ids, ["1", "2"])
+        self.assertEqual(blocks[0].status, "repaired")
+        self.assertIn("crossing mappings merged", blocks[0].problems[0])
+
+    def test_low_confidence_shared_boundary_is_promoted_into_block(self) -> None:
+        cue = SubtitleCue(5, 8, "共同字幕", "1")
+        windows = [
+            CandidateWindow(PrimarySegment("p_1", 5, 6, "Setup.", ["p1"]), [cue]),
+            CandidateWindow(PrimarySegment("p_2", 6, 8, "Punchline.", ["p2"]), [cue]),
+        ]
+        validated = AlignmentValidator().validate(
+            [
+                AlignmentResult("p_1", ["1"], 0.9),
+                AlignmentResult("p_2", ["1"], 0.4),
+            ],
+            windows,
+        )
+
+        blocks = build_alignment_blocks(windows, validated)
+
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0].primary_segment_ids, ["p_1", "p_2"])
+        self.assertEqual(blocks[0].secondary_cue_ids, ["1"])
+        self.assertEqual(blocks[0].status, "repaired")
+        self.assertIn("shared cue promoted", blocks[0].problems[0])
 
     def test_validator_merges_duplicates_and_reports_every_missing_or_unknown_result(self) -> None:
         cue_1 = SubtitleCue(1, 2, "uno", "1")
@@ -169,6 +259,48 @@ class AlignmentTests(unittest.TestCase):
             self.assertTrue(json_out.exists())
             self.assertIn("I thought you said you weren't coming back.", primary_out.read_text(encoding="utf-8"))
             self.assertIn("Pensé que dijiste que no volverías.", secondary_out.read_text(encoding="utf-8"))
+
+    def test_align_subtitles_merges_shared_cues_without_creating_review_work(self) -> None:
+        class SharedCueClient:
+            def align_batch(self, windows):
+                return [
+                    AlignmentResult(
+                        window.primary.segment_id,
+                        ["1"],
+                        0.9 if index == 0 else 0.4,
+                    )
+                    for index, window in enumerate(windows)
+                ]
+
+        primary_srt = """1
+00:00:01,000 --> 00:00:02,000
+First sentence.
+
+2
+00:00:02,100 --> 00:00:03,000
+Second sentence.
+"""
+        secondary_srt = """1
+00:00:00,900 --> 00:00:03,100
+Una traducción compartida.
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            primary_path = tmp_path / "primary.srt"
+            secondary_path = tmp_path / "secondary.srt"
+            primary_path.write_text(primary_srt, encoding="utf-8")
+            secondary_path.write_text(secondary_srt, encoding="utf-8")
+
+            package = align_subtitles(
+                primary_path,
+                secondary_path,
+                client=SharedCueClient(),
+            )
+
+        self.assertEqual(len(package.segments), 1)
+        self.assertEqual(package.segments[0].primary_segment_ids, ["p_00001", "p_00002"])
+        self.assertEqual(package.segments[0].status, "repaired")
+        self.assertEqual(package.issues, [])
 
     def test_alignment_cache_round_trips_batch_results(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -220,6 +352,7 @@ class AlignmentTests(unittest.TestCase):
             reloaded = load_alignment_package(sidecar)
 
         self.assertEqual(reloaded.segments[0].status, "reviewed")
+        self.assertEqual(reloaded.segments[0].primary_segment_ids, ["p_1"])
         self.assertEqual(reloaded.segments[0].secondary_text, "Hola.")
         primary, secondary = tracks_from_alignment_package(reloaded)
         self.assertEqual(primary.active_text(1.5), "Hello.")

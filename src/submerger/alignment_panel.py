@@ -360,9 +360,14 @@ class AlignmentPanel(QWidget):
         unresolved = [
             segment
             for segment in self.package.segments
-            if segment.status not in {"ok", "reviewed"}
+            if segment.status == "needs_review"
         ]
-        segment_ids = {segment.segment_id for segment in self.package.segments}
+        segment_ids = {
+            primary_id
+            for segment in self.package.segments
+            for primary_id in (segment.primary_segment_ids or [segment.segment_id])
+        }
+        segment_ids.update(segment.segment_id for segment in self.package.segments)
         orphan_issues = [
             issue
             for issue in self.package.issues
@@ -376,8 +381,14 @@ class AlignmentPanel(QWidget):
         shown = unresolved if self.issues_only.isChecked() else self.package.segments
         for segment in shown:
             problems = f" · {'; '.join(segment.problems)}" if segment.problems else ""
+            source_ids = segment.primary_segment_ids or [segment.segment_id]
+            block_label = (
+                source_ids[0]
+                if len(source_ids) == 1
+                else f"{source_ids[0]}–{source_ids[-1]}"
+            )
             item = QListWidgetItem(
-                f"{segment.segment_id} · {segment.status} · "
+                f"{block_label} · {segment.status} · "
                 f"{segment.start:.1f}s{problems}"
             )
             item.setData(Qt.ItemDataRole.UserRole, segment.segment_id)

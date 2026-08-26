@@ -14,8 +14,8 @@ from .settings import model_supports_custom_temperature
 from .subtitles import SubtitleCue, SubtitleTrack, format_srt_timestamp, parse_srt
 
 
-ALIGNMENT_SCHEMA_VERSION = 2
-ALIGNMENT_PIPELINE_VERSION = "2026-08-25.1"
+ALIGNMENT_SCHEMA_VERSION = 3
+ALIGNMENT_PIPELINE_VERSION = "2026-08-25.3"
 
 
 SENTENCE_END_RE = re.compile(r'[.!?。！？]["\'”’)\]]*$')
@@ -77,6 +77,7 @@ class PairedSegment:
     status: str
     problems: list[str] = field(default_factory=list)
     candidate_secondary_cues: list[SubtitleCue] = field(default_factory=list)
+    primary_segment_ids: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -236,7 +237,8 @@ class OpenAICompatibleAlignmentClient:
 ALIGNMENT_SYSTEM_PROMPT = """You align bilingual subtitles for language learning.
 Return only JSON with an "alignments" array.
 For each primary segment, choose only secondary cue ids from the provided candidates that match the complete semantic content of the primary text.
-Return cue ids, not rewritten text. Preserve monotonic order. Use an empty list and low confidence when no candidate is a good match.
+Return cue ids, not rewritten text. Preserve monotonic order. A secondary cue may legitimately cover multiple adjacent primary segments; reuse it only for each segment whose meaning it actually contains, and the caller will merge those segments into one N:M alignment block.
+Do not add a nearby reaction, interjection, setup line, or repeated cue unless its meaning appears in the current primary segment. Timing, similar tone, or a plausible-sounding localization is not enough: concrete meaning must match, even when paraphrased. Prefer an empty list with low confidence over an unrelated temporal neighbor.
 Each item must include primary_id, secondary_cue_ids, confidence from 0 to 1, and notes."""
 
 
@@ -258,8 +260,6 @@ class AlignmentValidator:
             else:
                 unknown_results.append(result)
 
-        seen: set[str] = set()
-        last_start = -1.0
         validated: list[ValidatedAlignment] = []
 
         for window in windows:
@@ -293,7 +293,6 @@ class AlignmentValidator:
             outside_window = [
                 cue_id for cue_id in result.secondary_cue_ids if cue_id not in candidate_lookup
             ]
-            reused = [cue_id for cue_id in result.secondary_cue_ids if cue_id in seen]
             selected = [
                 candidate_lookup[cue_id]
                 for cue_id in result.secondary_cue_ids
@@ -302,12 +301,8 @@ class AlignmentValidator:
 
             if outside_window:
                 problems.append(f"secondary cue ids outside candidate window: {', '.join(outside_window)}")
-            if reused:
-                problems.append(f"reused secondary cue ids: {', '.join(reused)}")
             if result.confidence < self.min_confidence:
                 problems.append("low confidence")
-            if selected and selected[0].start < last_start:
-                problems.append("non-monotonic secondary order")
             if any(left.start > right.start for left, right in zip(selected, selected[1:])):
                 problems.append("non-monotonic secondary order")
             if not selected:
@@ -315,14 +310,7 @@ class AlignmentValidator:
 
             accepted_ids: list[str] = []
             if result.confidence >= self.min_confidence:
-                available = sorted(
-                    (
-                        cue
-                        for cue in selected
-                        if cue.cue_id not in seen and cue.start >= last_start
-                    ),
-                    key=lambda cue: cue.start,
-                )
+                available = sorted(selected, key=lambda cue: cue.start)
                 accepted_ids = [cue.cue_id for cue in available]
 
             if not problems:
@@ -332,11 +320,6 @@ class AlignmentValidator:
             else:
                 status = "needs_review"
             validated.append(ValidatedAlignment(result=result, status=status, problems=problems, accepted_secondary_cue_ids=accepted_ids))
-
-            for cue_id in accepted_ids:
-                seen.add(cue_id)
-            if accepted_ids:
-                last_start = candidate_lookup[accepted_ids[-1]].start
 
         for result in unknown_results:
             validated.append(
@@ -437,12 +420,14 @@ def align_subtitles(
         raw_results.extend(batch_results)
 
     validated = AlignmentValidator().validate(raw_results, windows)
-    result_lookup = {item.result.primary_id: item for item in validated}
-    paired = [
-        make_paired_segment(window, result_lookup.get(window.primary.segment_id))
-        for window in windows
-    ]
-    issues = [item for item in validated if item.status != "ok"]
+    paired = build_alignment_blocks(windows, validated)
+    expected_ids = {window.primary.segment_id for window in windows}
+    issues = [alignment_block_issue(segment) for segment in paired if segment.status == "needs_review"]
+    issues.extend(
+        item
+        for item in validated
+        if item.result.primary_id not in expected_ids
+    )
     return AlignmentPackage(
         primary_language=primary_language,
         secondary_language=secondary_language,
@@ -472,6 +457,7 @@ def make_paired_segment(
             "needs_review",
             ["missing alignment result"],
             list(window.secondary_cues),
+            [segment.segment_id],
         )
 
     secondary_lookup = {cue.cue_id: cue for cue in window.secondary_cues}
@@ -492,6 +478,150 @@ def make_paired_segment(
         status=validated.status,
         problems=validated.problems,
         candidate_secondary_cues=list(window.secondary_cues),
+        primary_segment_ids=[segment.segment_id],
+    )
+
+
+def build_alignment_blocks(
+    windows: list[CandidateWindow],
+    validated: list[ValidatedAlignment],
+) -> list[PairedSegment]:
+    promoted = promote_shared_boundary_cues(windows, validated)
+    result_lookup = {item.result.primary_id: item for item in promoted}
+    blocks: list[PairedSegment] = []
+    for window in windows:
+        segment = make_paired_segment(
+            window,
+            result_lookup.get(window.primary.segment_id),
+        )
+        if blocks and alignment_blocks_overlap(blocks[-1], segment):
+            blocks[-1] = merge_alignment_blocks(blocks[-1], segment)
+        else:
+            blocks.append(segment)
+    return blocks
+
+
+def promote_shared_boundary_cues(
+    windows: list[CandidateWindow],
+    validated: list[ValidatedAlignment],
+) -> list[ValidatedAlignment]:
+    result_lookup = {item.result.primary_id: item for item in validated}
+    ordered = [result_lookup.get(window.primary.segment_id) for window in windows]
+    promoted = list(validated)
+    promoted_index = {
+        item.result.primary_id: index for index, item in enumerate(promoted)
+    }
+    for index, item in enumerate(ordered):
+        if item is None or item.accepted_secondary_cue_ids:
+            continue
+        if set(item.problems) != {"low confidence"}:
+            continue
+        neighboring_ids: set[str] = set()
+        for neighbor_index in (index - 1, index + 1):
+            if 0 <= neighbor_index < len(ordered):
+                neighbor = ordered[neighbor_index]
+                if neighbor is not None:
+                    neighboring_ids.update(neighbor.accepted_secondary_cue_ids)
+        shared_ids = [
+            cue_id
+            for cue_id in item.result.secondary_cue_ids
+            if cue_id in neighboring_ids
+        ]
+        if not shared_ids:
+            continue
+        replacement = replace(
+            item,
+            status="repaired",
+            problems=["low-confidence shared cue promoted into N:M block"],
+            accepted_secondary_cue_ids=list(dict.fromkeys(shared_ids)),
+        )
+        promoted[promoted_index[item.result.primary_id]] = replacement
+        ordered[index] = replacement
+    return promoted
+
+
+def alignment_blocks_overlap(left: PairedSegment, right: PairedSegment) -> bool:
+    if not left.secondary_cue_ids or not right.secondary_cue_ids:
+        return False
+    if set(left.secondary_cue_ids) & set(right.secondary_cue_ids):
+        return True
+    cue_lookup = {
+        cue.cue_id: cue
+        for cue in (*left.candidate_secondary_cues, *right.candidate_secondary_cues)
+    }
+    left_starts = [
+        cue_lookup[cue_id].start
+        for cue_id in left.secondary_cue_ids
+        if cue_id in cue_lookup
+    ]
+    right_starts = [
+        cue_lookup[cue_id].start
+        for cue_id in right.secondary_cue_ids
+        if cue_id in cue_lookup
+    ]
+    return bool(left_starts and right_starts and min(right_starts) <= max(left_starts))
+
+
+def merge_alignment_blocks(left: PairedSegment, right: PairedSegment) -> PairedSegment:
+    candidates = unique_sorted_cues(
+        [*left.candidate_secondary_cues, *right.candidate_secondary_cues]
+    )
+    candidate_lookup = {cue.cue_id: cue for cue in candidates}
+    selected = unique_sorted_cues([
+        candidate_lookup[cue_id]
+        for cue_id in (*left.secondary_cue_ids, *right.secondary_cue_ids)
+        if cue_id in candidate_lookup
+    ])
+    shared_cue_ids = set(left.secondary_cue_ids) & set(right.secondary_cue_ids)
+    crossed_without_reuse = not shared_cue_ids
+    statuses = {left.status, right.status}
+    status = (
+        "needs_review"
+        if "needs_review" in statuses
+        else "repaired"
+        if "repaired" in statuses or crossed_without_reuse
+        else "reviewed"
+        if statuses == {"reviewed"}
+        else "ok"
+    )
+    problems = list(dict.fromkeys((*left.problems, *right.problems)))
+    if crossed_without_reuse:
+        problems.append("crossing mappings merged into monotonic N:M block")
+    return PairedSegment(
+        segment_id=left.segment_id,
+        start=left.start,
+        end=right.end,
+        primary_text=normalize_segment_text([left.primary_text, right.primary_text]),
+        secondary_text=normalize_segment_text(cue.text for cue in selected),
+        primary_cue_ids=list(dict.fromkeys((*left.primary_cue_ids, *right.primary_cue_ids))),
+        secondary_cue_ids=[cue.cue_id for cue in selected],
+        confidence=min(left.confidence, right.confidence),
+        status=status,
+        problems=problems,
+        candidate_secondary_cues=candidates,
+        primary_segment_ids=list(dict.fromkeys((
+            *(left.primary_segment_ids or [left.segment_id]),
+            *(right.primary_segment_ids or [right.segment_id]),
+        ))),
+    )
+
+
+def unique_sorted_cues(cues: list[SubtitleCue]) -> list[SubtitleCue]:
+    unique = {cue.cue_id: cue for cue in cues}
+    return sorted(unique.values(), key=lambda cue: (cue.start, cue.end, cue.cue_id))
+
+
+def alignment_block_issue(segment: PairedSegment) -> ValidatedAlignment:
+    return ValidatedAlignment(
+        result=AlignmentResult(
+            segment.segment_id,
+            list(segment.secondary_cue_ids),
+            segment.confidence,
+            "alignment block requires review",
+        ),
+        status=segment.status,
+        problems=list(segment.problems),
+        accepted_secondary_cue_ids=list(segment.secondary_cue_ids),
     )
 
 
@@ -512,7 +642,8 @@ def write_alignment_outputs(package: AlignmentPackage, output_prefix: str | Path
 
 def write_alignment_sidecar(package: AlignmentPackage, output_prefix: str | Path) -> Path:
     path = alignment_artifact_path(output_prefix, ".alignment.json")
-    atomic_write_text(path, json.dumps(asdict(package), ensure_ascii=False, indent=2))
+    current = replace(package, schema_version=ALIGNMENT_SCHEMA_VERSION)
+    atomic_write_text(path, json.dumps(asdict(current), ensure_ascii=False, indent=2))
     return path
 
 
@@ -588,6 +719,9 @@ def paired_segment_from_dict(data: dict) -> PairedSegment:
             for value in data.get("candidate_secondary_cues", [])
             if isinstance(value, dict)
         ],
+        primary_segment_ids=[
+            str(value) for value in data.get("primary_segment_ids", [])
+        ] or [str(data.get("segment_id", ""))],
     )
 
 
@@ -656,6 +790,8 @@ def review_alignment_segment(
     for index, segment in enumerate(segments):
         if segment.segment_id != segment_id:
             continue
+        related_primary_ids = set(segment.primary_segment_ids or [segment.segment_id])
+        related_primary_ids.add(segment.segment_id)
         candidate_lookup = {cue.cue_id: cue for cue in segment.candidate_secondary_cues}
         requested_ids = (
             segment.secondary_cue_ids
@@ -670,7 +806,9 @@ def review_alignment_segment(
                 problems=[],
             )
             issues = [
-                issue for issue in package.issues if issue.result.primary_id != segment_id
+                issue
+                for issue in package.issues
+                if issue.result.primary_id not in related_primary_ids
             ]
             return replace(package, segments=segments, issues=issues)
         unknown = [cue_id for cue_id in requested_ids if cue_id not in candidate_lookup]
@@ -689,7 +827,9 @@ def review_alignment_segment(
             problems=[],
         )
         issues = [
-            issue for issue in package.issues if issue.result.primary_id != segment_id
+            issue
+            for issue in package.issues
+            if issue.result.primary_id not in related_primary_ids
         ]
         return replace(package, segments=segments, issues=issues)
     raise KeyError(f"Unknown alignment segment: {segment_id}")
