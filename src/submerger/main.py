@@ -49,6 +49,10 @@ def main(arguments: list[str] | None = None) -> int:
     app = QApplication([sys.argv[0]])
     prepare_process_environment()
 
+    from .theme import apply_application_theme
+
+    apply_application_theme(app)
+
     from .player import MainWindow
 
     window = MainWindow(restore_session=not args.no_restore and args.video is None)

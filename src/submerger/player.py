@@ -131,6 +131,7 @@ class DockTitleBar(QWidget):
                 color: #e5e7eb;
             }
             QLabel {
+                background: transparent;
                 color: #e5e7eb;
                 font-weight: 600;
             }

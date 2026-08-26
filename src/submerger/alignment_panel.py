@@ -255,7 +255,22 @@ class AlignmentPanel(QWidget):
         self.save_review_button.clicked.connect(self.save_alignment)
         self.setStyleSheet(
             """
-            AlignmentPanel, QLabel, QCheckBox { color: #e5e7eb; background: #111827; }
+            AlignmentPanel { color: #e5e7eb; background: #111827; }
+            QLabel, QCheckBox { color: #e5e7eb; background: transparent; }
+            QTabWidget::pane {
+                background: #111827;
+                border: 1px solid #334155;
+            }
+            QTabBar::tab {
+                background: #1f2937;
+                color: #cbd5e1;
+                border: 1px solid #334155;
+                padding: 6px 12px;
+            }
+            QTabBar::tab:selected {
+                background: #334155;
+                color: #f8fafc;
+            }
             QLineEdit, QComboBox, QSpinBox, QPlainTextEdit, QListWidget {
                 background: #0f172a;
                 color: #e2e8f0;
