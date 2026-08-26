@@ -15,11 +15,16 @@ from .alignment import (
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Clean and align two subtitle tracks for Submerger.")
-    parser.add_argument("primary", help="Primary SRT subtitle path.")
-    parser.add_argument("secondary", help="Secondary SRT subtitle path.")
+    parser.add_argument("primary", help="Media-language (authoritative) SRT subtitle path.")
+    parser.add_argument("secondary", help="Other-language SRT subtitle path.")
     parser.add_argument("-o", "--output-prefix", default="aligned", help="Output prefix for cleaned/aligned files.")
     parser.add_argument("--primary-language", default="primary")
     parser.add_argument("--secondary-language", default="secondary")
+    parser.add_argument(
+        "--media-language",
+        default=None,
+        help="Media language; defaults to --primary-language.",
+    )
     parser.add_argument("--provider", choices=("heuristic", "openai"), default="heuristic")
     parser.add_argument("--model", default=None, help="LLM model for --provider openai.")
     parser.add_argument("--base-url", default=None, help="OpenAI-compatible API base URL.")
@@ -47,6 +52,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quiet", action="store_true", help="Do not print per-batch progress.")
     parser.add_argument("--keep-non-dialogue", action="store_true", help="Keep SDH-only, ad, and positioned annotation cues.")
     parser.add_argument("--no-cache", action="store_true", help="Disable per-batch alignment cache/resume.")
+    parser.add_argument(
+        "--repair-target-dialogue",
+        action="store_true",
+        help=(
+            "Generate other-language text for high-confidence omitted or divergent "
+            "dialogue. Requires an OpenAI-compatible provider and context retry."
+        ),
+    )
     return parser
 
 
@@ -76,6 +89,13 @@ def main(argv: list[str] | None = None) -> int:
         context_retry=not args.no_context_retry,
         retry_context_segments=max(0, args.retry_context_segments),
         retry_pad_seconds=max(args.pad_seconds, args.retry_pad_seconds),
+        media_language=args.media_language,
+        repair_target_dialogue=args.repair_target_dialogue,
+        repair_cache_path=(
+            None
+            if args.no_cache
+            else alignment_artifact_path(output_prefix, ".repair-cache.json")
+        ),
     )
     paths = write_alignment_outputs(package, output_prefix)
     print(f"Wrote {paths[2]}")

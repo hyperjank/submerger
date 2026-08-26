@@ -35,6 +35,7 @@ class AlignmentPanelTests(unittest.TestCase):
         self.assertEqual(config["model"], "qwen3.5-4b")
         self.assertEqual(config["provider"], "lmstudio")
         self.assertTrue(config["context_retry"])
+        self.assertFalse(config["repair_target_dialogue"])
 
     def test_apply_llm_settings_updates_endpoint_fields(self) -> None:
         panel = AlignmentPanel()
@@ -80,11 +81,23 @@ class AlignmentPanelTests(unittest.TestCase):
         self.assertFalse(panel.base_url.isEnabled())
         self.assertFalse(panel.api_key.isEnabled())
         self.assertFalse(panel.timeout.isEnabled())
+        self.assertFalse(panel.repair_target_dialogue.isEnabled())
         self.assertEqual(panel.base_url.text(), old_endpoint)
 
         panel.provider.setCurrentText("lmstudio")
         self.assertTrue(panel.base_url.isEnabled())
+        self.assertTrue(panel.repair_target_dialogue.isEnabled())
         self.assertEqual(panel.base_url.text(), "http://192.168.86.113:1234/v1")
+
+    def test_repair_requires_context_retry_in_panel_config(self) -> None:
+        panel = AlignmentPanel()
+        panel.repair_target_dialogue.setChecked(True)
+        self.assertTrue(panel.config()["repair_target_dialogue"])
+
+        panel.context_retry.setChecked(False)
+
+        self.assertFalse(panel.repair_target_dialogue.isEnabled())
+        self.assertFalse(panel.config()["repair_target_dialogue"])
 
     def test_review_panel_applies_checked_source_cues_and_saves_sidecar(self) -> None:
         cue = SubtitleCue(1, 2, "Hola.", "s1", "Hola.")

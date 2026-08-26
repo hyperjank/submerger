@@ -115,9 +115,10 @@ Episodes`. State is stored at `~/.local/state/submerger/playback.json` by defaul
 
 ## Align Subtitles
 
-The offline aligner cleans the primary subtitle file into fuller utterance
-segments and asks an alignment provider to map secondary subtitle cue ids to
-each primary segment. Its canonical output is a versioned `.alignment.json`
+The offline aligner treats the media-language subtitle as the authoritative
+track, cleans it into fuller utterance segments, and asks an alignment provider
+to map other-language subtitle cue ids to each segment. Its canonical output is
+a versioned `.alignment.json`
 sidecar containing source provenance, validator findings, candidate cues, and
 human review state. The CLI also exports:
 
@@ -165,13 +166,40 @@ each side, chronological secondary context, the first attempt, and accepted
 neighbor mappings as anchors. A conservative gate accepts changed mappings only
 when there is structural evidence such as a newly visible cue or a shared
 boundary; extra context alone cannot overturn an initial semantic rejection.
-Retry responses are cached, and schema 4 sidecars record whether each block came
-from the initial pass, context retry, or human review.
+Retry responses are cached, and schema 5 sidecars record whether each block came
+from the initial pass, context retry, generated repair, or human review.
+
+The context pass also classifies empty mappings as omitted dialogue,
+non-dialogue, or still uncertain. High-confidence sounds, non-propositional
+reactions, SDH labels, and metadata remain visible in the sidecar as `ignored`
+blocks but no longer become review work. Meaningful dialogue that the other
+track omits or materially changes becomes an explicit repair candidate.
+
+Opt in to generating those missing other-language lines with:
+
+```bash
+OPENAI_API_KEY=... submerger-align media.en.srt other.zh.srt \
+  --provider openai \
+  --model gpt-5.6-terra \
+  --primary-language en \
+  --secondary-language zh \
+  --repair-target-dialogue \
+  --output-prefix episode
+```
+
+Repair requires the primary input to match the media language, context retry,
+and an LLM provider. It is off by default. Imported text, timings, and cue IDs
+are never overwritten: generated text is a separate sidecar artifact carrying
+the source hashes and IDs, candidate cue IDs, provider, model, confidence, and
+reason. Playback and optional SRT export render that artifact when present. A
+separate `.repair-cache.json` makes reruns resumable.
 
 Use `--no-context-retry` to disable the retry. Advanced CLI controls are
 `--retry-context-segments` and `--retry-pad-seconds`. The alignment panel exposes
 the normal on/off choice as `Retry unresolved mappings with surrounding
-dialogue`.
+dialogue`, plus an unchecked repair option. The panel labels the inputs
+`Media-language SRT` and `Other-language SRT` to make the asymmetric repair
+contract clear.
 
 The same pipeline is available in the player through the `Align` button. The
 alignment dock can use the currently loaded subtitle paths, run heuristic or

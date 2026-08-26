@@ -76,6 +76,14 @@ class AlignmentWorker(QRunnable):
                 progress=progress,
                 cache_path=alignment_artifact_path(output_prefix, ".alignment-cache.json"),
                 context_retry=bool(self.config.get("context_retry", True)),
+                media_language=self.config["primary_language"],
+                repair_target_dialogue=bool(
+                    self.config.get("repair_target_dialogue", False)
+                ),
+                repair_cache_path=alignment_artifact_path(
+                    output_prefix,
+                    ".repair-cache.json",
+                ),
             )
             sidecar_path = alignment_artifact_path(output_prefix, ".alignment.json")
             if sidecar_path.exists():
@@ -137,6 +145,14 @@ class AlignmentPanel(QWidget):
             "Retry unresolved mappings with surrounding dialogue"
         )
         self.context_retry.setChecked(True)
+        self.repair_target_dialogue = QCheckBox(
+            "Generate missing or meaningfully divergent other-language dialogue"
+        )
+        self.repair_target_dialogue.setChecked(False)
+        self.repair_target_dialogue.setToolTip(
+            "Uses the media-language subtitle as authoritative context. Imported "
+            "subtitle text is preserved; generated text is stored separately with provenance."
+        )
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
 
@@ -168,8 +184,8 @@ class AlignmentPanel(QWidget):
             button.setEnabled(False)
 
         form = QFormLayout()
-        form.addRow("Primary SRT", path_row(self.primary_path, self.primary_browse))
-        form.addRow("Secondary SRT", path_row(self.secondary_path, self.secondary_browse))
+        form.addRow("Media-language SRT", path_row(self.primary_path, self.primary_browse))
+        form.addRow("Other-language SRT", path_row(self.secondary_path, self.secondary_browse))
         form.addRow("Output Prefix", self.output_prefix)
         form.addRow("Provider", self.provider)
         form.addRow("Model", self.model)
@@ -177,8 +193,8 @@ class AlignmentPanel(QWidget):
         form.addRow("API Key", self.api_key)
         form.addRow("Timeout", self.timeout)
         form.addRow("Batch Size", self.batch_size)
-        form.addRow("Primary Lang", self.primary_language)
-        form.addRow("Secondary Lang", self.secondary_language)
+        form.addRow("Media Lang", self.primary_language)
+        form.addRow("Other Lang", self.secondary_language)
 
         buttons = QHBoxLayout()
         buttons.addWidget(self.run_button)
@@ -201,6 +217,7 @@ class AlignmentPanel(QWidget):
         run_layout.addWidget(self.export_srt)
         run_layout.addWidget(self.load_when_done)
         run_layout.addWidget(self.context_retry)
+        run_layout.addWidget(self.repair_target_dialogue)
         run_layout.addLayout(buttons)
         run_layout.addWidget(QLabel("Progress"))
         run_layout.addWidget(self.log, 1)
@@ -210,9 +227,9 @@ class AlignmentPanel(QWidget):
         review_layout.addLayout(review_header)
         review_layout.addWidget(self.review_summary)
         review_layout.addWidget(self.review_list, 1)
-        review_layout.addWidget(QLabel("Primary segment"))
+        review_layout.addWidget(QLabel("Media-language segment"))
         review_layout.addWidget(self.primary_review)
-        review_layout.addWidget(QLabel("Candidate secondary cues"))
+        review_layout.addWidget(QLabel("Candidate other-language cues"))
         review_layout.addWidget(self.candidate_list, 1)
         review_layout.addWidget(self.review_status)
         review_layout.addLayout(review_buttons)
@@ -227,6 +244,7 @@ class AlignmentPanel(QWidget):
         self.primary_browse.clicked.connect(lambda: self.browse_into(self.primary_path))
         self.secondary_browse.clicked.connect(lambda: self.browse_into(self.secondary_path))
         self.provider.currentTextChanged.connect(self.apply_provider_preset)
+        self.context_retry.toggled.connect(self.update_repair_enabled)
         self.run_button.clicked.connect(self.emit_run)
         self.open_alignment_button.clicked.connect(self.open_alignment)
         self.load_button.clicked.connect(self.load_last_alignment)
@@ -297,6 +315,13 @@ class AlignmentPanel(QWidget):
     def set_endpoint_fields_enabled(self, enabled: bool) -> None:
         for field in (self.model, self.base_url, self.api_key, self.timeout):
             field.setEnabled(enabled)
+        self.update_repair_enabled()
+
+    def update_repair_enabled(self, _checked: bool | None = None) -> None:
+        self.repair_target_dialogue.setEnabled(
+            self.provider.currentText() != "heuristic"
+            and self.context_retry.isChecked()
+        )
 
     def emit_run(self) -> None:
         self.log.clear()
@@ -319,6 +344,10 @@ class AlignmentPanel(QWidget):
             "secondary_language": self.secondary_language.text(),
             "export_srt": self.export_srt.isChecked(),
             "context_retry": self.context_retry.isChecked(),
+            "repair_target_dialogue": (
+                self.repair_target_dialogue.isChecked()
+                and self.repair_target_dialogue.isEnabled()
+            ),
         }
 
     def mark_finished(self, result: dict) -> None:
@@ -368,7 +397,7 @@ class AlignmentPanel(QWidget):
         unresolved = [
             segment
             for segment in self.package.segments
-            if segment.status == "needs_review"
+            if segment.status in {"needs_review", "needs_repair"}
         ]
         segment_ids = {
             primary_id
@@ -453,9 +482,19 @@ class AlignmentPanel(QWidget):
             if segment.alignment_notes
             else ""
         )
+        generated_note = ""
+        if segment.generated_secondary is not None:
+            generated = segment.generated_secondary
+            generated_note = (
+                f"\nGenerated {generated.target_language}: {generated.text}"
+                f"\nProvenance: {generated.provider} / {generated.model} · "
+                f"confidence {generated.confidence:.2f}"
+            )
         self.review_status.setText(
             f"Status: {segment.status} · {segment.alignment_stage.replace('_', ' ')} · "
-            f"confidence {segment.confidence:.2f} · {problem_text}{model_note}"
+            f"{segment.disposition.replace('_', ' ')} · "
+            f"confidence {segment.confidence:.2f} · {problem_text}"
+            f"{model_note}{generated_note}"
         )
         self.review_status.setToolTip(segment.alignment_notes)
         self.approve_button.setEnabled(True)
@@ -472,7 +511,7 @@ class AlignmentPanel(QWidget):
         segment = self.current_segment()
         if segment is None:
             return
-        self.apply_review(segment.secondary_cue_ids)
+        self.apply_review(None)
 
     def apply_checked_cues(self) -> None:
         selected_ids: list[str] = []
@@ -485,7 +524,7 @@ class AlignmentPanel(QWidget):
                 selected_ids.append(cue_id)
         self.apply_review(selected_ids)
 
-    def apply_review(self, selected_ids: list[str]) -> None:
+    def apply_review(self, selected_ids: list[str] | None) -> None:
         segment_id = self.current_segment_id()
         if self.package is None or segment_id is None:
             return

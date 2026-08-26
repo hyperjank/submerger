@@ -7,6 +7,7 @@ from submerger.alignment import (
     AlignmentPackage,
     AlignmentValidator,
     CandidateWindow,
+    GeneratedSubtitle,
     carry_forward_human_reviews,
     HeuristicAlignmentClient,
     PairedSegment,
@@ -20,9 +21,14 @@ from submerger.alignment import (
     has_terminal_sentence_end,
     load_alignment_cache,
     load_alignment_package,
+    context_alignment_response_format,
+    effective_secondary_text,
+    alignment_response_format,
     review_alignment_segment,
     save_alignment_cache,
     tracks_from_alignment_package,
+    SubtitleRepairResult,
+    write_aligned_srt_exports,
     write_alignment_sidecar,
     write_alignment_outputs,
 )
@@ -411,7 +417,7 @@ Después.
         )
         self.assertEqual(reloaded_target.alignment_stage, "context_retry")
         self.assertEqual(reloaded_target.alignment_notes, "resolved from wider context")
-        self.assertEqual(reloaded_package.schema_version, 4)
+        self.assertEqual(reloaded_package.schema_version, 5)
         self.assertEqual(client.initial_calls, 1)
         self.assertEqual(client.retry_calls, 1)
 
@@ -550,6 +556,293 @@ News flash, babies!
         self.assertEqual(merged.segments[0].status, "reviewed")
         self.assertEqual(merged.segments[0].secondary_text, "Hola.")
         self.assertEqual(changed_source.segments[0].status, "needs_review")
+
+    def test_context_dispositions_require_high_confidence_and_context_stage(self) -> None:
+        window = CandidateWindow(
+            PrimarySegment("p_1", 1, 2, "[door closes]", ["p1"]),
+            [],
+        )
+        validator = AlignmentValidator()
+
+        accepted = validator.validate([
+            AlignmentResult(
+                "p_1", [], 0.96, "sound only", "context_retry", "non_dialogue"
+            )
+        ], [window])[0]
+        low_confidence = validator.validate([
+            AlignmentResult(
+                "p_1", [], 0.75, "maybe omitted", "context_retry", "omitted_dialogue"
+            )
+        ], [window])[0]
+        wrong_stage = validator.validate([
+            AlignmentResult(
+                "p_1", [], 0.99, "premature", "initial", "non_dialogue"
+            )
+        ], [window])[0]
+        calibrated_terminal = validator.validate([
+            AlignmentResult(
+                "p_1", [], 0.87, "confident omission", "context_retry", "omitted_dialogue"
+            )
+        ], [window])[0]
+
+        self.assertEqual(accepted.status, "ignored")
+        self.assertEqual(accepted.result.disposition, "non_dialogue")
+        self.assertEqual(low_confidence.status, "needs_review")
+        self.assertIn("low-confidence terminal disposition", low_confidence.problems)
+        self.assertEqual(wrong_stage.status, "needs_review")
+        self.assertIn("terminal disposition requires context retry", wrong_stage.problems)
+        self.assertEqual(calibrated_terminal.status, "needs_repair")
+
+    def test_repair_is_opt_in_cached_and_preserves_imported_sources(self) -> None:
+        class RepairClient:
+            def __init__(self) -> None:
+                self.initial_calls = 0
+                self.retry_calls = 0
+                self.repair_calls = 0
+
+            def cache_identity(self):
+                return {"provider": "test", "model": "translator-v1"}
+
+            def align_batch(self, windows):
+                self.initial_calls += 1
+                return [
+                    AlignmentResult(window.primary.segment_id, [], 0.1, "not translated")
+                    for window in windows
+                ]
+
+            def align_batch_with_context(self, regions):
+                self.retry_calls += 1
+                return [
+                    AlignmentResult(
+                        region["target"]["primary"]["segment_id"],
+                        [],
+                        0.98,
+                        "meaningful dialogue is omitted",
+                        disposition="omitted_dialogue",
+                    )
+                    for region in regions
+                ]
+
+            def repair_batch(self, regions, *, source_language, target_language):
+                self.repair_calls += 1
+                assert source_language == "en"
+                assert target_language == "es"
+                return [
+                    SubtitleRepairResult(
+                        region["repair_target"]["primary_id"],
+                        "No volveré.",
+                        target_language,
+                        0.97,
+                        "faithful concise translation",
+                    )
+                    for region in regions
+                ]
+
+        primary_srt = """1
+00:00:01,000 --> 00:00:02,000
+I will not return.
+"""
+        secondary_srt = """1
+00:00:01,000 --> 00:00:02,000
+Hasta luego.
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            primary_path = tmp_path / "primary.srt"
+            secondary_path = tmp_path / "secondary.srt"
+            alignment_cache = tmp_path / "alignment-cache.json"
+            repair_cache = tmp_path / "repair-cache.json"
+            primary_path.write_text(primary_srt, encoding="utf-8")
+            secondary_path.write_text(secondary_srt, encoding="utf-8")
+            original_primary = primary_path.read_bytes()
+            original_secondary = secondary_path.read_bytes()
+            client = RepairClient()
+
+            unrepaired = align_subtitles(
+                primary_path,
+                secondary_path,
+                primary_language="en",
+                secondary_language="es",
+                client=client,
+            )
+            repaired = align_subtitles(
+                primary_path,
+                secondary_path,
+                primary_language="en",
+                secondary_language="es",
+                client=client,
+                cache_path=alignment_cache,
+                repair_cache_path=repair_cache,
+                repair_target_dialogue=True,
+            )
+            cached = align_subtitles(
+                primary_path,
+                secondary_path,
+                primary_language="en",
+                secondary_language="es",
+                client=client,
+                cache_path=alignment_cache,
+                repair_cache_path=repair_cache,
+                repair_target_dialogue=True,
+            )
+            _, secondary_export = write_aligned_srt_exports(
+                repaired, tmp_path / "episode"
+            )
+            secondary_export_text = secondary_export.read_text(encoding="utf-8")
+
+            self.assertEqual(primary_path.read_bytes(), original_primary)
+            self.assertEqual(secondary_path.read_bytes(), original_secondary)
+
+        self.assertEqual(unrepaired.segments[0].status, "needs_repair")
+        self.assertIsNone(unrepaired.segments[0].generated_secondary)
+        segment = repaired.segments[0]
+        self.assertEqual(segment.status, "generated")
+        self.assertEqual(segment.disposition, "omitted_dialogue")
+        self.assertEqual(segment.secondary_text, "")
+        self.assertEqual(segment.secondary_cue_ids, [])
+        self.assertEqual(effective_secondary_text(segment), "No volveré.")
+        self.assertEqual(segment.generated_secondary.candidate_secondary_cue_ids, ["1"])
+        self.assertEqual(segment.generated_secondary.provider, "test")
+        self.assertEqual(repaired.issues, [])
+        self.assertEqual(cached.segments, repaired.segments)
+        self.assertEqual(client.repair_calls, 1)
+        self.assertIn("No volveré.", secondary_export_text)
+
+    def test_generated_secondary_round_trips_and_human_review_supersedes_it(self) -> None:
+        candidate = SubtitleCue(1, 2, "Original.", "s1", "Original.")
+        generated = GeneratedSubtitle(
+            text="Generated.",
+            target_language="es",
+            confidence=0.98,
+            reason="omitted",
+            provider="test",
+            model="model",
+            prompt_version="v1",
+            source_primary_segment_ids=["p_1"],
+            source_primary_cue_ids=["p1"],
+            candidate_secondary_cue_ids=["s1"],
+            source_primary_sha256="digest",
+        )
+        package = AlignmentPackage(
+            "en",
+            "es",
+            [
+                PairedSegment(
+                    "p_1", 1, 2, "Hello.", "", ["p1"], [], 0.98,
+                    "generated", [], [candidate], ["p_1"], "omitted",
+                    "generated_repair", "omitted_dialogue", generated,
+                )
+            ],
+            [],
+            media_language="en",
+            repair_enabled=True,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            sidecar = write_alignment_sidecar(package, Path(tmp) / "episode")
+            loaded = load_alignment_package(sidecar)
+
+        self.assertEqual(effective_secondary_text(loaded.segments[0]), "Generated.")
+        accepted_generated = review_alignment_segment(loaded, "p_1")
+        self.assertEqual(accepted_generated.segments[0].status, "reviewed")
+        self.assertIsNotNone(accepted_generated.segments[0].generated_secondary)
+        self.assertEqual(
+            effective_secondary_text(accepted_generated.segments[0]),
+            "Generated.",
+        )
+        reviewed = review_alignment_segment(loaded, "p_1", ["s1"])
+        self.assertIsNone(reviewed.segments[0].generated_secondary)
+        self.assertEqual(reviewed.segments[0].secondary_text, "Original.")
+        self.assertEqual(reviewed.segments[0].disposition, "matched")
+
+    def test_repair_requires_primary_to_be_media_language(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            primary = Path(tmp) / "primary.srt"
+            secondary = Path(tmp) / "secondary.srt"
+            primary.write_text(PRIMARY_SRT, encoding="utf-8")
+            secondary.write_text(SECONDARY_SRT, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "swap the subtitle inputs"):
+                align_subtitles(
+                    primary,
+                    secondary,
+                    primary_language="es",
+                    secondary_language="en",
+                    media_language="en",
+                    repair_target_dialogue=True,
+                )
+
+    def test_invalid_repair_output_remains_reviewable(self) -> None:
+        class InvalidRepairClient:
+            def cache_identity(self):
+                return {"provider": "test", "model": "bad-translator"}
+
+            def align_batch(self, windows):
+                return [AlignmentResult(window.primary.segment_id, [], 0.1) for window in windows]
+
+            def align_batch_with_context(self, regions):
+                return [
+                    AlignmentResult(
+                        region["target"]["primary"]["segment_id"],
+                        [],
+                        0.99,
+                        "omitted",
+                        disposition="omitted_dialogue",
+                    )
+                    for region in regions
+                ]
+
+            def repair_batch(self, regions, *, source_language, target_language):
+                return [
+                    SubtitleRepairResult(
+                        region["repair_target"]["primary_id"],
+                        "wrong language",
+                        source_language,
+                        0.99,
+                        "invalid target language",
+                    )
+                    for region in regions
+                ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            primary = Path(tmp) / "primary.srt"
+            secondary = Path(tmp) / "secondary.srt"
+            primary.write_text(PRIMARY_SRT, encoding="utf-8")
+            secondary.write_text(SECONDARY_SRT, encoding="utf-8")
+            package = align_subtitles(
+                primary,
+                secondary,
+                primary_language="en",
+                secondary_language="es",
+                client=InvalidRepairClient(),
+                repair_target_dialogue=True,
+            )
+
+        self.assertTrue(package.issues)
+        self.assertTrue(all(segment.status == "needs_repair" for segment in package.segments))
+        self.assertTrue(all(segment.generated_secondary is None for segment in package.segments))
+
+    def test_alignment_response_schemas_only_classify_context_retries(self) -> None:
+        initial_item = alignment_response_format()["json_schema"]["schema"]["properties"]["alignments"]["items"]
+        context_item = context_alignment_response_format()["json_schema"]["schema"]["properties"]["alignments"]["items"]
+
+        self.assertNotIn("disposition", initial_item["properties"])
+        self.assertIn("disposition", context_item["properties"])
+        self.assertIn("disposition", context_item["required"])
+
+    def test_legacy_sidecar_infers_uncertain_for_empty_alignment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "legacy.alignment.json"
+            path.write_text(
+                '{"schema_version":4,"primary_language":"en",'
+                '"secondary_language":"es","segments":[{'
+                '"segment_id":"p_1","primary_text":"Hello",'
+                '"secondary_text":"","secondary_cue_ids":[],"status":"needs_review"}]}',
+                encoding="utf-8",
+            )
+            loaded = load_alignment_package(path)
+
+        self.assertEqual(loaded.schema_version, 4)
+        self.assertEqual(loaded.segments[0].disposition, "uncertain")
+        self.assertIsNone(loaded.segments[0].generated_secondary)
 
 
 if __name__ == "__main__":
